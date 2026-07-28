@@ -706,6 +706,40 @@ ${vocabBlock(hints, tags)}
 `.trim();
 }
 
+/* ---------- 章の並び順と、既読章の文脈 ---------- */
+/* 章番号で自然順に並べる（「第3章」「3-2」などに対応） */
+function chapKey(c){
+  const m = String(c.chapter_no||"").match(/\d+(?:[-.]\d+)*/);
+  return m ? m[0].split(/[-.]/).map(Number) : [Number.MAX_SAFE_INTEGER];
+}
+function cmpChap(a,b){
+  const x = chapKey(a), y = chapKey(b);
+  for(let i=0;i<Math.max(x.length,y.length);i++){
+    const d = (x[i]||0)-(y[i]||0); if(d) return d;
+  }
+  return String(a.chunk_id||"").localeCompare(String(b.chunk_id||""));
+}
+function sortChunks(cs){ return [...cs].sort(cmpChap); }
+
+/* 同じ本の既読章を、議論の流れを追える形にまとめる。
+   before を渡すと、その章より前のものだけを対象にする（作り直し用）。 */
+async function priorContext(bookId, before){
+  if(!bookId) return "";
+  let cs = sortChunks((await getAll("chunks")).filter(c=>c.book_id===bookId));
+  // 章番号が読み取れない場合は絞り込まず、既存の章をすべて文脈に使う
+  if(before && chapKey(before)[0] !== Number.MAX_SAFE_INTEGER)
+    cs = cs.filter(c=>c.chunk_id!==before.chunk_id && cmpChap(c,before)<0);
+  else if(before)
+    cs = cs.filter(c=>c.chunk_id!==before.chunk_id);
+  if(!cs.length) return "";
+  return cs.map(c=>
+`■ ${c.chapter_no} ${c.chapter_title}
+　要約: ${c.short_summary}
+　要点: ${(c.key_points||[]).join(" ／ ")}
+　当時の私の所感: ${c.my_comment ? c.my_comment.slice(0,400) : "（記録なし）"}`
+  ).join("\n\n");
+}
+
 function metaPrompt(body, comment, tags, prior){
   const priorBlock = prior ? `
 【この本で私がすでに読んだ章（章番号順）】
@@ -754,7 +788,8 @@ ${tags.length ? tags.join("、") : "（まだ登録なし）"}
 
 - thought_shift: 120字程度。既読章の「当時の私の所感」と今回の所感を読み比べ、
   読者自身の理解や評価がどう動いたかを書く。
-  変化が見られない場合や所感が乏しい場合は、無理に作らず空文字にする。
+  **既読章が1つも無い場合は、比較対象が存在しないので必ず空文字にすること。**
+  既読章があっても、変化が見られない場合や所感が乏しい場合は、無理に作らず空文字にする。
   本の内容ではなく、あくまで読者の考えの推移だけを扱うこと。
 
 【出力形式】以下のJSONのみを出力する。
@@ -1029,7 +1064,9 @@ $("btnMeta").onclick = async ()=>{
   busy(btn,true,"整理しています");
   try{
     const tags = (await getAll("tags")).sort((a,b)=>b.count-a.count).map(t=>t.tag);
-    const prior = await priorContext($("bookSel").value);
+    // 章を順番どおりに録音するとは限らないので、入力中の章より前のものだけを渡す
+    const prior = await priorContext($("bookSel").value,
+      {chapter_no: $("fChapNo").value, chunk_id: "\uffff"});
     const m = await callGemini(
       [{text: metaPrompt(body, $("fComment").value, tags, prior)}], 0.3);
     state.meta = m;
