@@ -214,6 +214,10 @@ details[open] summary{margin-bottom:7px}
       <h2>音読した内容を入れる</h2>
       <p class="lede">録音ファイルから起こすか、読み上げた文字を直接入れます。</p>
 
+      <label for="ingestBook">どの本を読みますか</label>
+      <select id="ingestBook"></select>
+      <div class="hint" id="ingestBookHint">選ぶと、その本に登録したヒントが戻ります。</div>
+
       <label for="hintText">聞き取りのヒント（任意だが効果は大きい）</label>
       <textarea id="hintText" style="min-height:76px"
         placeholder="書名、著者名、登場する専門用語や人名を書いておくと、その表記が優先されます。&#10;例：ソフトウェアアーキテクチャの基礎、マーク・リチャーズ、モジュラーモノリス、境界づけられたコンテキスト"></textarea>
@@ -354,8 +358,13 @@ details[open] summary{margin-bottom:7px}
     <div class="card">
       <h2>収蔵しました</h2>
       <p class="lede" id="savedMsg"></p>
-      <div class="actions">
-        <button class="btn" id="btnNext">次の章へ</button>
+      <div id="savedWhat"></div>
+
+      <label>次にどうしますか</label>
+      <div style="display:flex;flex-direction:column;gap:10px;margin-top:8px">
+        <button class="btn" id="btnSameBook">同じ本の続きを録る</button>
+        <button class="btn ghost" id="btnOtherBook">別の本を読み始める</button>
+        <button class="btn ghost" id="btnGoShelf">書架で確かめる</button>
       </div>
     </div>
   </div>
@@ -812,6 +821,7 @@ document.querySelectorAll("#nav button").forEach(b=>{
     document.querySelectorAll("#nav button").forEach(x=>x.setAttribute("aria-selected", x===b));
     document.querySelectorAll(".panel").forEach(p=>p.classList.remove("on"));
     $("p-"+b.dataset.p).classList.add("on");
+    if(b.dataset.p==="ingest")   renderIngestBooks();
     if(b.dataset.p==="shelf")    renderShelf();
     if(b.dataset.p==="ask")      renderAskTags();
     if(b.dataset.p==="report")   renderReportBooks();
@@ -838,7 +848,45 @@ function busy(btn,on,label){
 /* =====================================================================
    取り込み
 ===================================================================== */
-let state = { trans:null, meta:null };
+let state = { trans:null, meta:null, bookId:"" };
+let lastSaved = null;
+
+/* ---- 読む本の選択（ヒントの出し入れを兼ねる） ---- */
+async function renderIngestBooks(){
+  const books = await getAll("books");
+  const sel = $("ingestBook");
+  sel.innerHTML = `<option value="">新しい本を読む／まだ決めない</option>` +
+    books.map(b=>`<option value="${esc(b.book_id)}">${esc(b.title)}</option>`).join("");
+  sel.value = books.some(b=>b.book_id===state.bookId) ? state.bookId : "";
+  updateIngestHint(books);
+
+  sel.onchange = async ()=>{
+    state.bookId = sel.value;
+    const b = books.find(x=>x.book_id===sel.value);
+    $("hintText").value = b ? (b.hints||"") : "";
+    updateIngestHint(books);
+  };
+}
+
+function updateIngestHint(books){
+  const b = books.find(x=>x.book_id===state.bookId);
+  $("ingestBookHint").textContent = b
+    ? `『${b.title}』の続きとして取り込みます。前章までの流れが引き継がれます。`
+    : "選ぶと、その本に登録したヒントが戻ります。新しい本なら選ばなくて構いません。";
+}
+
+/* ---- 取り込み画面を初期状態に戻す ---- */
+function resetIngest(keepBook){
+  state = { trans:null, meta:null, bookId: keepBook ? state.bookId : "" };
+  if(!keepBook) $("hintText").value = "";
+  $("rawText").value = ""; $("rawInfo").textContent = "0 字";
+  $("btnCorrect").disabled = true;
+  $("audio").value = ""; setAudio(null);
+  $("recPlay").style.display = "none"; $("recTime").textContent = "00:00";
+  $("btnRec").textContent = "録音を始める"; $("btnPause").style.display = "none";
+  renderIngestBooks();
+  setStep(1);
+}
 
 /* ---- 入力モードの切り替え ---- */
 $("modeSw").querySelectorAll("button").forEach(b=>{
@@ -1039,7 +1087,9 @@ async function fillStep2(r){
   const sel = $("bookSel");
   sel.innerHTML = `<option value="">＋ 新しい本として登録する</option>` +
     books.map(b=>`<option value="${esc(b.book_id)}">${esc(b.title)}</option>`).join("");
-  const hit = books.find(b=>String(b.title).trim()===String(r.title||"").trim());
+  // 取り込み画面で本を指定していればそれを優先し、無ければ書名で照合する
+  const hit = books.find(b=>b.book_id===state.bookId)
+           || books.find(b=>String(b.title).trim()===String(r.title||"").trim());
   sel.value = hit ? hit.book_id : "";
   sel.onchange = ()=> $("newBookBox").style.display = sel.value ? "none" : "";
   sel.onchange();
@@ -1117,6 +1167,7 @@ $("btnSave").onclick = async ()=>{
   busy(btn,true,"収蔵しています");
   try{
     let bookId = $("bookSel").value;
+    const hints = $("hintText").value.trim();
     if(!bookId){
       const books = await getAll("books");
       bookId = nextId(books,"book_id","B",4);
@@ -1124,9 +1175,12 @@ $("btnSave").onclick = async ()=>{
         book_id:bookId, title:$("fTitle").value.trim()||"（無題）",
         author:$("fAuthor").value.trim(), publisher:"", published_year:"",
         genre:$("fGenre").value, purpose:$("fPurpose").value.trim(),
-        overall_summary:"", rating:"", status:"読書中",
+        overall_summary:"", rating:"", status:"読書中", hints,
         created_at:nowStr(), updated_at:nowStr()
       });
+    }else if(hints){
+      const b = await getOne("books", bookId);
+      if(b && b.hints !== hints) await put("books",{...b, hints, updated_at:nowStr()});
     }
 
     const chunks = await getAll("chunks");
@@ -1157,21 +1211,32 @@ $("btnSave").onclick = async ()=>{
         : {tag:t, count:1, first_used:todayStr(), note:""});
     }
 
-    $("savedMsg").textContent = `${chunkId}として収めました。控えは設定タブから書き出せます。`;
+    const savedBook = await getOne("books", bookId);
+    lastSaved = { bookId, chunkId,
+      title: savedBook ? savedBook.title : "",
+      chapter: `${$("fChapNo").value.trim()} ${$("fChapTitle").value.trim()}`.trim() };
+    state.bookId = bookId;
+
+    $("savedMsg").textContent = "控えは設定タブから書き出せます。";
+    $("savedWhat").innerHTML =
+      `<div class="src"><strong>『${esc(lastSaved.title)}』</strong><br>` +
+      `${esc(lastSaved.chapter)}<br><span class="mono">${esc(chunkId)}</span></div>`;
+    $("btnSameBook").textContent = `『${lastSaved.title}』の続きを録る`;
+
     await renderAlert();
     setStep(4);
   }catch(err){ alert(err.message); }
   finally{ busy(btn,false); }
 };
 
-$("btnNext").onclick = ()=>{
-  state = {trans:null, meta:null};
-  $("rawText").value = ""; $("rawInfo").textContent = "0 字";
-  $("btnCorrect").disabled = true;
-  $("audio").value = ""; setAudio(null);
-  $("recPlay").style.display = "none"; $("recTime").textContent = "00:00";
-  $("btnRec").textContent = "録音を始める"; $("btnPause").style.display = "none";
-  setStep(1);
+$("btnSameBook").onclick = ()=> resetIngest(true);
+
+$("btnOtherBook").onclick = ()=> resetIngest(false);
+
+$("btnGoShelf").onclick = ()=>{
+  if(lastSaved) openBook = lastSaved.bookId;
+  resetIngest(true);
+  document.querySelector('#nav button[data-p="shelf"]').click();
 };
 
 /* =====================================================================
@@ -1867,6 +1932,7 @@ $("btnWipe").onclick = async ()=>{
     await requestPersist(false);
     await renderStat();
     await renderAlert();
+    await renderIngestBooks();
 
     if(location.protocol === "file:"){
       document.querySelector('#nav button[data-p="settings"]').click();
