@@ -1,0 +1,1316 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>音読書架 — 読書音読RAG</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&family=Noto+Serif+JP:wght@500;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --paper:#E9EBE6;
+  --card:#FCFCFA;
+  --ink:#1F3A5F;
+  --ink-deep:#152A45;
+  --moss:#4A6B52;
+  --mustard:#C98A1F;
+  --text:#21262B;
+  --muted:#6E7570;
+  --line:#CDD2CC;
+  --danger:#9B3B32;
+  --serif:"Noto Serif JP",'Hiragino Mincho ProN',serif;
+  --sans:"Noto Sans JP",system-ui,-apple-system,sans-serif;
+  --mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+  --r:3px;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:var(--paper);color:var(--text);font-family:var(--sans);
+  font-size:15px;line-height:1.75;
+  padding-bottom:env(safe-area-inset-bottom);
+  -webkit-text-size-adjust:100%;
+}
+
+/* ---------- ヘッダー ---------- */
+header{
+  background:var(--ink-deep);color:#EDEFEA;
+  padding:14px 18px calc(14px + env(safe-area-inset-top));
+  padding-top:calc(14px + env(safe-area-inset-top));
+  position:sticky;top:0;z-index:20;
+}
+.brand{display:flex;align-items:baseline;gap:10px}
+.brand h1{
+  font-family:var(--serif);font-weight:700;font-size:19px;margin:0;
+  letter-spacing:.14em;
+}
+.brand span{font-size:11px;color:#8FA4BC;letter-spacing:.08em}
+nav{display:flex;gap:2px;margin-top:12px;overflow-x:auto;scrollbar-width:none}
+nav::-webkit-scrollbar{display:none}
+nav button{
+  flex:0 0 auto;background:transparent;border:0;border-bottom:2px solid transparent;
+  color:#93A7BD;font-family:var(--sans);font-size:13px;font-weight:500;
+  padding:7px 13px;cursor:pointer;white-space:nowrap;
+}
+nav button[aria-selected="true"]{color:#fff;border-bottom-color:var(--mustard)}
+nav button:focus-visible{outline:2px solid var(--mustard);outline-offset:-2px}
+
+main{max-width:820px;margin:0 auto;padding:22px 16px 80px}
+.panel{display:none;animation:rise .28s ease}
+.panel.on{display:block}
+@keyframes rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+
+/* ---------- 共通パーツ ---------- */
+h2{font-family:var(--serif);font-size:17px;font-weight:700;letter-spacing:.06em;margin:0 0 4px}
+.lede{color:var(--muted);font-size:13px;margin:0 0 18px}
+.card{
+  background:var(--card);border:1px solid var(--line);border-radius:var(--r);
+  padding:18px;margin-bottom:14px;
+}
+label{display:block;font-size:12px;font-weight:700;color:var(--ink);
+  letter-spacing:.06em;margin:14px 0 5px}
+label:first-child{margin-top:0}
+input[type=text],input[type=password],textarea,select{
+  width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:var(--r);
+  font-family:var(--sans);font-size:15px;background:#fff;color:var(--text);line-height:1.7;
+}
+textarea{resize:vertical;min-height:90px}
+input:focus,textarea:focus,select:focus{outline:2px solid var(--ink);outline-offset:-1px;border-color:var(--ink)}
+.hint{font-size:12px;color:var(--muted);margin-top:5px}
+.row{display:flex;gap:10px;flex-wrap:wrap}
+.row>*{flex:1 1 160px;min-width:0}
+
+button.btn{
+  font-family:var(--sans);font-size:14px;font-weight:700;letter-spacing:.04em;
+  padding:11px 18px;border-radius:var(--r);border:1px solid var(--ink);
+  background:var(--ink);color:#fff;cursor:pointer;
+}
+button.btn:hover{background:var(--ink-deep)}
+button.btn.ghost{background:transparent;color:var(--ink)}
+button.btn.ghost:hover{background:rgba(31,58,95,.07)}
+button.btn.warn{border-color:var(--danger);background:transparent;color:var(--danger)}
+button.btn:disabled{opacity:.45;cursor:not-allowed}
+button.btn:focus-visible{outline:2px solid var(--mustard);outline-offset:2px}
+.actions{display:flex;gap:10px;margin-top:20px}
+.actions .btn{flex:1}
+
+.tag{
+  display:inline-block;font-size:12px;padding:2px 9px;margin:3px 4px 0 0;
+  border:1px solid var(--line);border-radius:999px;background:#fff;color:var(--muted);
+}
+.tag.cat{border-color:var(--moss);color:var(--moss);font-weight:700}
+.tag.sel{background:var(--ink);border-color:var(--ink);color:#fff}
+button.tag{cursor:pointer;font-family:var(--sans)}
+
+.note{
+  border-left:3px solid var(--mustard);background:#FBF6EA;
+  padding:11px 14px;font-size:13px;margin:14px 0;border-radius:0 var(--r) var(--r) 0;
+}
+.note.bad{border-left-color:var(--danger);background:#FAEEED}
+.mono{font-family:var(--mono);font-size:12px;color:var(--muted)}
+
+/* ---------- ステップ ---------- */
+.steps{display:flex;gap:0;margin-bottom:20px;border-bottom:1px solid var(--line)}
+.steps div{
+  flex:1;font-size:11px;text-align:center;padding:0 0 9px;color:var(--muted);
+  border-bottom:2px solid transparent;margin-bottom:-1px;letter-spacing:.04em;
+}
+.steps div.now{color:var(--ink);font-weight:700;border-bottom-color:var(--ink)}
+.steps div.done{color:var(--moss)}
+.steps b{display:block;font-family:var(--mono);font-size:15px;font-weight:400}
+
+/* ---------- 署名要素：背表紙 ---------- */
+.shelf{
+  display:flex;gap:7px;overflow-x:auto;padding:22px 2px 14px;
+  border-bottom:2px solid var(--ink);margin-bottom:22px;align-items:flex-end;
+}
+.spine{
+  flex:0 0 auto;width:44px;height:186px;background:var(--ink);
+  border-radius:2px 2px 0 0;cursor:pointer;position:relative;
+  display:flex;flex-direction:column-reverse;gap:2px;padding:5px;
+  border:0;transition:transform .18s ease;
+}
+.spine:hover,.spine:focus-visible{transform:translateY(-7px);outline:none}
+.spine.on{background:var(--ink-deep);box-shadow:0 0 0 2px var(--mustard)}
+.spine .seg{
+  height:9px;background:rgba(255,255,255,.26);border-radius:1px;flex:0 0 auto;
+  animation:fill .4s ease;
+}
+.spine .seg.hi{background:var(--mustard)}
+@keyframes fill{from{transform:scaleX(0);opacity:0}to{transform:none;opacity:1}}
+.spine .ttl{
+  position:absolute;inset:0;padding:9px 4px;color:#fff;font-family:var(--serif);
+  font-size:12px;font-weight:500;writing-mode:vertical-rl;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;pointer-events:none;
+}
+.shelf-empty{color:var(--muted);font-size:13px;padding:60px 0;text-align:center;width:100%}
+
+/* ---------- 章リスト ---------- */
+.chunk{border-bottom:1px solid var(--line);padding:15px 0}
+.chunk:last-child{border-bottom:0}
+.chunk h3{font-family:var(--serif);font-size:15px;margin:0 0 3px;font-weight:700}
+.chunk .meta{font-size:11px;color:var(--muted);font-family:var(--mono)}
+.chunk p{margin:7px 0 0;font-size:13px;color:#3D454B}
+details summary{cursor:pointer;font-size:13px;color:var(--ink);font-weight:700;padding:7px 0}
+details[open] summary{margin-bottom:7px}
+.body-text{white-space:pre-wrap;font-size:14px;line-height:1.95;background:#fff;
+  border:1px solid var(--line);padding:14px;border-radius:var(--r);max-height:340px;overflow:auto}
+
+/* ---------- 回答 ---------- */
+.answer{font-size:15px;line-height:1.95;white-space:pre-wrap}
+.src{border-left:3px solid var(--moss);padding:8px 12px;margin:9px 0;background:#F3F6F2;font-size:13px}
+.spin{display:inline-block;width:13px;height:13px;border:2px solid rgba(255,255,255,.35);
+  border-top-color:#fff;border-radius:50%;animation:sp .7s linear infinite;vertical-align:-2px;margin-right:7px}
+@keyframes sp{to{transform:rotate(360deg)}}
+
+.qa-item{border-top:1px dashed var(--line);padding:10px 0}
+.qa-item:first-of-type{border-top:0}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <h1>音読書架</h1><span>READING / RECITE / RECALL</span>
+  </div>
+  <nav id="nav" role="tablist">
+    <button role="tab" data-p="ingest" aria-selected="true">取り込み</button>
+    <button role="tab" data-p="shelf" aria-selected="false">書架</button>
+    <button role="tab" data-p="ask" aria-selected="false">問う</button>
+    <button role="tab" data-p="report" aria-selected="false">資料</button>
+    <button role="tab" data-p="settings" aria-selected="false">設定</button>
+  </nav>
+</header>
+
+<main>
+
+<!-- =============== 取り込み =============== -->
+<section class="panel on" id="p-ingest">
+  <div class="steps" id="steps">
+    <div class="now"><b>1</b>音声</div>
+    <div><b>2</b>確認</div>
+    <div><b>3</b>整理</div>
+    <div><b>4</b>収蔵</div>
+  </div>
+
+  <!-- STEP 1 -->
+  <div id="s1">
+    <div class="card">
+      <h2>音声を読み込む</h2>
+      <p class="lede">章ごとに録音したファイルを選びます。</p>
+      <input type="file" id="audio" accept="audio/*">
+      <div id="audioInfo" class="hint"></div>
+      <div class="actions">
+        <button class="btn" id="btnTranscribe" disabled>文字起こしを始める</button>
+      </div>
+    </div>
+    <details class="card">
+      <summary>録音のしかた</summary>
+      <ol style="font-size:13px;padding-left:20px;margin:8px 0 0">
+        <li>冒頭に「書名『◯◯』、著者△△、第1章『□□』」と言う</li>
+        <li>本文を読み上げる</li>
+        <li><strong>「ここから所感」</strong>と言う</li>
+        <li>自分の考えを話す</li>
+      </ol>
+    </details>
+  </div>
+
+  <!-- STEP 2 -->
+  <div id="s2" style="display:none">
+    <div class="card">
+      <h2>聞き取りを確かめる</h2>
+      <p class="lede">ここで直した内容が、要約もタグも検索も決めます。固有名詞を重点的に。</p>
+      <div id="confNote"></div>
+
+      <label for="bookSel">収める本</label>
+      <select id="bookSel"></select>
+
+      <div id="newBookBox">
+        <div class="row">
+          <div><label for="fTitle">書名</label><input type="text" id="fTitle"></div>
+          <div><label for="fAuthor">著者</label><input type="text" id="fAuthor"></div>
+        </div>
+        <label for="fGenre">主ジャンル</label>
+        <select id="fGenre"></select>
+        <label for="fPurpose">読む目的（任意）</label>
+        <input type="text" id="fPurpose">
+      </div>
+
+      <div class="row">
+        <div style="flex:0 0 120px"><label for="fChapNo">章番号</label><input type="text" id="fChapNo"></div>
+        <div style="flex:2"><label for="fChapTitle">章タイトル</label><input type="text" id="fChapTitle"></div>
+      </div>
+
+      <label for="fBody">本文</label>
+      <textarea id="fBody" style="min-height:280px"></textarea>
+      <label for="fComment">自分の所感</label>
+      <textarea id="fComment" style="min-height:150px"></textarea>
+      <div class="hint" id="charCount"></div>
+
+      <div class="actions">
+        <button class="btn ghost" id="btnBack2">戻る</button>
+        <button class="btn" id="btnMeta">要約とタグを作る</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- STEP 3 -->
+  <div id="s3" style="display:none">
+    <div class="card">
+      <h2>要約とタグを整える</h2>
+      <p class="lede">一言要約は検索の入口になります。読み返して調整してください。</p>
+
+      <label for="mShort">一言要約</label>
+      <textarea id="mShort" style="min-height:70px"></textarea>
+      <label for="mSummary">詳細要約</label>
+      <textarea id="mSummary" style="min-height:170px"></textarea>
+      <label for="mPoints">要点（1行に1つ）</label>
+      <textarea id="mPoints" style="min-height:130px"></textarea>
+
+      <label for="mFlow">前章からの流れ</label>
+      <textarea id="mFlow" style="min-height:100px"></textarea>
+      <label for="mShift">私の考えの変化</label>
+      <textarea id="mShift" style="min-height:90px"></textarea>
+      <div class="hint" id="flowHint"></div>
+
+      <div class="row">
+        <div><label for="mCat1">大分類</label><select id="mCat1"></select></div>
+        <div><label for="mCat2">大分類（副）</label><select id="mCat2"></select></div>
+      </div>
+
+      <label for="mTags">タグ（カンマ区切り）</label>
+      <input type="text" id="mTags">
+      <div class="hint" id="tagHint"></div>
+
+      <label>想定Q&amp;A</label>
+      <div id="qaBox"></div>
+
+      <label for="mImp">重要度 <span id="impVal" class="mono"></span></label>
+      <input type="range" id="mImp" min="1" max="5" step="1" style="width:100%">
+
+      <div class="actions">
+        <button class="btn ghost" id="btnBack3">戻る</button>
+        <button class="btn" id="btnSave">書架に収める</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- STEP 4 -->
+  <div id="s4" style="display:none">
+    <div class="card">
+      <h2>収蔵しました</h2>
+      <p class="lede" id="savedMsg"></p>
+      <div class="actions">
+        <button class="btn" id="btnNext">次の章へ</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- =============== 書架 =============== -->
+<section class="panel" id="p-shelf">
+  <h2>書架</h2>
+  <p class="lede">背表紙の帯が1章です。からし色は重要度4以上。</p>
+  <div class="shelf" id="shelf"></div>
+  <div id="bookDetail"></div>
+</section>
+
+<!-- =============== 問う =============== -->
+<section class="panel" id="p-ask">
+  <h2>蓄積に問う</h2>
+  <p class="lede">まず関連する章を選び、その本文だけを読んで答えます。</p>
+  <div class="card">
+    <label>タグで絞る（未選択なら全体から探します）</label>
+    <div id="askTags"></div>
+    <label for="askQ">質問</label>
+    <textarea id="askQ" placeholder="例：リーダーが権限委譲するときの判断基準は？"></textarea>
+    <div class="actions">
+      <button class="btn" id="btnAsk">問う</button>
+    </div>
+  </div>
+  <div id="askResult"></div>
+</section>
+
+<!-- =============== 資料 =============== -->
+<section class="panel" id="p-report">
+  <h2>資料を作る</h2>
+  <p class="lede">蓄積した章から、本1冊分の要約レポートを組み立てます。</p>
+  <div class="card">
+    <label for="repBook">対象の本</label>
+    <select id="repBook"></select>
+    <label><input type="checkbox" id="repOverview" checked style="width:auto;margin-right:7px">本全体の概要をAIに書かせる</label>
+    <div class="actions">
+      <button class="btn" id="btnReport">レポートを書き出す</button>
+    </div>
+    <div class="hint">Wordで開ける形式（.doc）で保存されます。</div>
+  </div>
+  <div id="repResult"></div>
+</section>
+
+<!-- =============== 設定 =============== -->
+<section class="panel" id="p-settings">
+  <h2>設定</h2>
+  <p class="lede">鍵とデータはこの端末のブラウザ内にだけ保存されます。</p>
+
+  <div class="card">
+    <label for="apiKey">Gemini APIキー</label>
+    <input type="password" id="apiKey" placeholder="AIza...">
+    <div class="hint">AI Studio（aistudio.google.com/apikey）で無料で発行できます。</div>
+    <div class="actions">
+      <button class="btn" id="btnSaveKey">鍵を保存</button>
+      <button class="btn ghost" id="btnTestKey">接続を試す</button>
+    </div>
+    <div class="actions" style="margin-top:10px">
+      <button class="btn ghost" id="btnDiag">接続を診断する</button>
+    </div>
+    <div id="keyMsg"></div>
+    <pre id="diagOut" class="mono" style="white-space:pre-wrap;display:none;background:#fff;border:1px solid var(--line);padding:12px;border-radius:3px;font-size:12px;line-height:1.7"></pre>
+  </div>
+
+  <div class="card">
+    <h2>控えを取る</h2>
+    <p class="lede">ブラウザのデータは消えることがあります。月に一度は書き出してください。</p>
+    <div id="stat" class="mono"></div>
+    <div class="actions">
+      <button class="btn" id="btnExport">JSONに書き出す</button>
+      <button class="btn ghost" id="btnImportPick">JSONを読み込む</button>
+    </div>
+    <input type="file" id="importFile" accept="application/json" style="display:none">
+    <div class="note">Safariは7日間使わないとデータを削除することがあります。ホーム画面に追加して、定期的に開いてください。</div>
+  </div>
+
+  <div class="card">
+    <h2>すべて消す</h2>
+    <p class="lede">この端末に保存した本・章・タグ・鍵をすべて削除します。取り消せません。</p>
+    <div class="actions"><button class="btn warn" id="btnWipe">すべて削除</button></div>
+  </div>
+</section>
+
+</main>
+
+<script>
+"use strict";
+
+/* =====================================================================
+   定数
+===================================================================== */
+const PROMPT_VERSION = "v1.0";
+const MODEL = "gemini-2.5-flash";
+const INLINE_LIMIT = 18 * 1024 * 1024;
+
+const CATEGORIES = [
+  "経営・戦略","組織・マネジメント","マーケティング・営業","財務・会計",
+  "思考法・意思決定","習慣・セルフマネジメント","コミュニケーション・交渉",
+  "キャリア・学習法","プロダクト・UX","プロジェクトマネジメント・開発プロセス",
+  "ソフトウェア設計・アーキテクチャ","プログラミング・実装技術","データ・AI",
+  "インフラ・セキュリティ","その他"
+];
+
+const CATEGORY_GUIDE = `
+【大分類の境界判断】
+- 「どう進めるか」（進行管理・アジャイル・見積もり） → プロジェクトマネジメント・開発プロセス
+- 「どう作るか」（設計思想） → ソフトウェア設計・アーキテクチャ
+- 「どう作るか」（言語・テスト・リファクタリング） → プログラミング・実装技術
+- 「誰とやるか」（採用・評価・組織文化） → 組織・マネジメント`;
+
+/* =====================================================================
+   IndexedDB
+===================================================================== */
+const DB_NAME = "ondoku-shoka", DB_VER = 1;
+let db;
+
+function openDB(){
+  return new Promise((ok,ng)=>{
+    const rq = indexedDB.open(DB_NAME, DB_VER);
+    rq.onupgradeneeded = e=>{
+      const d = e.target.result;
+      if(!d.objectStoreNames.contains("books"))
+        d.createObjectStore("books",{keyPath:"book_id"});
+      if(!d.objectStoreNames.contains("chunks")){
+        const s = d.createObjectStore("chunks",{keyPath:"chunk_id"});
+        s.createIndex("book_id","book_id",{unique:false});
+      }
+      if(!d.objectStoreNames.contains("tags"))
+        d.createObjectStore("tags",{keyPath:"tag"});
+      if(!d.objectStoreNames.contains("settings"))
+        d.createObjectStore("settings",{keyPath:"key"});
+    };
+    rq.onsuccess = e=>{ db = e.target.result; ok(db); };
+    rq.onerror  = ()=> ng(new Error("この端末のブラウザはデータ保存を許可していません。プライベートブラウズを解除してください。"));
+  });
+}
+const tx = (store,mode)=> db.transaction(store,mode).objectStore(store);
+const req = r => new Promise((ok,ng)=>{ r.onsuccess=()=>ok(r.result); r.onerror=()=>ng(r.error); });
+const getAll = s => req(tx(s,"readonly").getAll());
+const put    = (s,v)=> req(tx(s,"readwrite").put(v));
+const getOne = (s,k)=> req(tx(s,"readonly").get(k));
+const clearS = s => req(tx(s,"readwrite").clear());
+
+async function getSetting(k,def=""){ const r = await getOne("settings",k); return r ? r.value : def; }
+const setSetting = (k,value)=> put("settings",{key:k,value});
+
+function nextId(rows,key,prefix,digits){
+  let max = 0;
+  rows.forEach(r=>{
+    const v = String(r[key]||"");
+    if(v.startsWith(prefix)){ const n = parseInt(v.slice(prefix.length),10); if(n>max) max=n; }
+  });
+  return prefix + String(max+1).padStart(digits,"0");
+}
+const nowStr   = ()=> new Date().toLocaleString("sv-SE").replace("T"," ");
+const todayStr = ()=> new Date().toLocaleDateString("sv-SE");
+
+/* =====================================================================
+   Gemini
+===================================================================== */
+async function callGemini(parts, temperature, expectJson=true){
+  const key = await getSetting("apiKey");
+  if(!key) throw new Error("設定タブでGemini APIキーを保存してください。");
+
+  const body = {
+    contents:[{parts}],
+    generationConfig:{ temperature, maxOutputTokens:32768 }
+  };
+  if(expectJson) body.generationConfig.responseMimeType = "application/json";
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${encodeURIComponent(key)}`;
+  const payload = JSON.stringify(body);
+
+  // application/json はプリフライト(OPTIONS)を発生させる。
+  // それが遮断される環境向けに、単純リクエストになる text/plain で再試行する。
+  let res, firstErr;
+  for(const ct of ["application/json","text/plain;charset=UTF-8"]){
+    try{
+      res = await fetch(url,{ method:"POST", headers:{"Content-Type":ct}, body:payload });
+      break;
+    }catch(e){ firstErr = firstErr || e; }
+  }
+
+  if(!res){
+    if(location.protocol === "file:")
+      throw new Error("ファイルを直接開いているため、Geminiに接続できません。file:// のページからの外部通信はブラウザが遮断します。簡易サーバー経由か、GitHub Pages・Netlifyなどに置いて開いてください。");
+    throw new Error("Geminiに接続できませんでした。設定タブの「接続を診断する」を実行すると、原因を切り分けられます。（" + firstErr.message + "）");
+  }
+
+  if(!res.ok){
+    const t = await res.text();
+    if(res.status===429) throw new Error("Geminiの無料枠の上限に達しました。1分ほど待って再実行してください。");
+    if(res.status===400 && t.includes("API key")) throw new Error("APIキーが正しくありません。設定タブで確認してください。");
+    throw new Error(`Geminiエラー ${res.status}: ${t.slice(0,300)}`);
+  }
+
+  const data = await res.json();
+  const cand = data.candidates && data.candidates[0];
+  if(!cand) throw new Error("Geminiから応答がありませんでした。");
+  if(cand.finishReason === "SAFETY") throw new Error("安全性フィルタにより応答が止まりました。");
+
+  const text = (cand.content?.parts||[]).map(p=>p.text||"").join("");
+  if(!text.trim()) throw new Error("応答が空でした。音声が短すぎないか確認してください。");
+  return expectJson ? parseJson(text) : text;
+}
+
+function parseJson(text){
+  let t = text.trim().replace(/^```(?:json)?\s*/,"").replace(/\s*```$/,"");
+  try{ return JSON.parse(t); }
+  catch(e){
+    const a = t.indexOf("{"), b = t.lastIndexOf("}");
+    if(a<0||b<0) throw new Error("応答を解釈できませんでした:\n"+text.slice(0,300));
+    return JSON.parse(t.slice(a,b+1));
+  }
+}
+
+const toBase64 = file => new Promise((ok,ng)=>{
+  const r = new FileReader();
+  r.onload  = ()=> ok(String(r.result).split(",")[1]);
+  r.onerror = ()=> ng(new Error("ファイルを読み込めませんでした。"));
+  r.readAsDataURL(file);
+});
+
+/* ---------- プロンプト ---------- */
+const TRANSCRIBE_PROMPT = `
+あなたは読書記録の文字起こし専門家です。
+この音声は、ある人物が書籍を章単位で音読し、その後に自分の所感を述べたものです。
+
+【音声の構造】
+1. 冒頭で書名・著者・章番号・章タイトルを口頭で宣言している
+2. 続いて本文を読み上げている
+3. 「ここから所感」などの区切り宣言がある
+4. その後は本人のコメント・感想
+
+【あなたの仕事】
+1. 音声を正確に文字起こしする
+2. 音声を聞いた上で、誤変換・同音異義語を文脈から正しく判断して修正する
+   （例: 機械/機会、進化/深化、意思/意志、保証/保障）
+3. 専門用語・カタカナ語・人名・書名は正しい表記に直す
+4. 「えー」「あの」などのフィラー、明らかな言い直しは削除する
+5. 意味は絶対に変えない。要約も脚色もしない
+6. 読みやすいよう、意味のまとまりごとに改行を入れ、段落を分ける
+7. 冒頭の宣言部分から書誌情報を抽出する
+8. 区切り宣言の前後で本文と所感を分離する（宣言が無ければ my_comment は空文字）
+9. 宣言部分そのもの（「書名○○、第3章」等）は body_text に含めない
+
+【出力形式】以下のJSONのみを出力する。説明文やコードブロック記号は付けない。
+{
+  "title":"書名",
+  "author":"著者名（不明なら空文字）",
+  "chapter_no":"第3章 のような章番号",
+  "chapter_title":"章タイトル（不明なら空文字）",
+  "body_text":"整形済みの本文。改行で段落分けする",
+  "my_comment":"所感パート。無ければ空文字",
+  "confidence_note":"聞き取りが不確実だった箇所を簡潔に。無ければ空文字"
+}`.trim();
+
+/* 章番号で自然順に並べる（「第3章」「3-2」などに対応） */
+function chapKey(c){
+  const m = String(c.chapter_no||"").match(/\d+(?:[-.]\d+)*/);
+  return m ? m[0].split(/[-.]/).map(Number) : [Number.MAX_SAFE_INTEGER];
+}
+function sortChunks(cs){
+  return [...cs].sort((a,b)=>{
+    const x = chapKey(a), y = chapKey(b);
+    for(let i=0;i<Math.max(x.length,y.length);i++){
+      const d = (x[i]||0)-(y[i]||0); if(d) return d;
+    }
+    return String(a.chunk_id).localeCompare(String(b.chunk_id));
+  });
+}
+
+/* 同じ本の既読章を、議論の流れを追える形にまとめる */
+async function priorContext(bookId){
+  if(!bookId) return "";
+  const cs = sortChunks((await getAll("chunks")).filter(c=>c.book_id===bookId));
+  if(!cs.length) return "";
+  return cs.map(c=>
+`■ ${c.chapter_no} ${c.chapter_title}
+　要約: ${c.short_summary}
+　要点: ${(c.key_points||[]).join(" ／ ")}
+　当時の私の所感: ${c.my_comment ? c.my_comment.slice(0,400) : "（記録なし）"}`
+  ).join("\n\n");
+}
+
+function metaPrompt(body, comment, tags, prior){
+  const priorBlock = prior ? `
+【この本で私がすでに読んだ章（章番号順）】
+${prior}
+` : `
+【この本で私がすでに読んだ章】
+まだありません。この章がこの本の起点です。
+`;
+
+  return `
+あなたは読書ナレッジベースの構築を支援する編集者です。
+以下は、ある書籍の1章分の内容と、読者本人の所感です。検索・活用しやすい形に構造化してください。
+
+===== 本文 =====
+${body}
+
+===== 読者の所感 =====
+${comment || "（なし）"}
+=================
+${priorBlock}
+【大分類リスト】必ずこの中から選ぶ。新規作成は禁止。
+${CATEGORIES.map(c=>"- "+c).join("\n")}
+${CATEGORY_GUIDE}
+
+【既存の自由タグ一覧】
+${tags.length ? tags.join("、") : "（まだ登録なし）"}
+
+【タグ付けの厳格なルール】
+1. まず既存タグ一覧を確認し、該当する概念があれば必ず既存タグをそのまま使う
+2. 表記ゆれを絶対に作らない（「リーダーシップ」があるなら「指導力」を新設しない）
+3. どうしても既存タグで表せない概念のみ新規タグを作ってよい
+4. タグは3〜7個。抽象的すぎる語は避け、後で検索に使える具体性を持たせる
+
+【各項目の指針】
+- short_summary: 80字程度。検索インデックス用。この章が何について書かれているか一読で分かるように
+- summary: 300〜400字。読んで内容を思い出せる密度で
+- key_points: 3〜5個。各50字以内
+- qa: 想定質問5問。「この章を読んだ人が後日抱くであろう疑問」を想定し、本文に基づき120字程度で答える
+- importance: 1〜5。繰り返し参照する価値が高いほど大きく
+- category_2: 該当が無ければ空文字。無理に埋めない
+
+- context_flow: 150字程度。既読章の議論を受けて、この章が何を積み上げたかを書く。
+  「前章では〜を示した上で、本章では〜へ進む」のように、論の運びが分かる書き方にする。
+  内容の要約の繰り返しではなく、章と章の接続を説明すること。
+  既読章が無い場合は、この本がどこから始まるのかを1文で書く。
+
+- thought_shift: 120字程度。既読章の「当時の私の所感」と今回の所感を読み比べ、
+  読者自身の理解や評価がどう動いたかを書く。
+  変化が見られない場合や所感が乏しい場合は、無理に作らず空文字にする。
+  本の内容ではなく、あくまで読者の考えの推移だけを扱うこと。
+
+【出力形式】以下のJSONのみを出力する。
+{
+ "short_summary":"","summary":"","key_points":["",""],
+ "context_flow":"","thought_shift":"",
+ "category_1":"","category_2":"","tags":["",""],
+ "qa":[{"q":"","a":""}],"importance":3
+}`.trim();
+}
+
+/* =====================================================================
+   UI 基礎
+===================================================================== */
+const $ = id => document.getElementById(id);
+const esc = s => String(s??"").replace(/[&<>"]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+document.querySelectorAll("#nav button").forEach(b=>{
+  b.onclick = ()=>{
+    document.querySelectorAll("#nav button").forEach(x=>x.setAttribute("aria-selected", x===b));
+    document.querySelectorAll(".panel").forEach(p=>p.classList.remove("on"));
+    $("p-"+b.dataset.p).classList.add("on");
+    if(b.dataset.p==="shelf")    renderShelf();
+    if(b.dataset.p==="ask")      renderAskTags();
+    if(b.dataset.p==="report")   renderReportBooks();
+    if(b.dataset.p==="settings") renderStat();
+    window.scrollTo(0,0);
+  };
+});
+
+function setStep(n){
+  [...$("steps").children].forEach((d,i)=>{
+    d.className = i+1===n ? "now" : (i+1<n ? "done" : "");
+  });
+  ["s1","s2","s3","s4"].forEach((id,i)=> $(id).style.display = i+1===n ? "" : "none");
+  window.scrollTo(0,0);
+}
+function msg(el,text,bad=false){
+  el.innerHTML = `<div class="note${bad?" bad":""}">${esc(text)}</div>`;
+}
+function busy(btn,on,label){
+  btn.disabled = on;
+  btn.innerHTML = on ? `<span class="spin"></span>${esc(label)}` : btn.dataset.label;
+}
+
+/* =====================================================================
+   取り込み
+===================================================================== */
+let state = { trans:null, meta:null, audioName:"" };
+
+$("audio").onchange = e=>{
+  const f = e.target.files[0];
+  const btn = $("btnTranscribe");
+  if(!f){ btn.disabled = true; $("audioInfo").textContent=""; return; }
+  const mb = f.size/1024/1024;
+  $("audioInfo").textContent = `${f.name} / ${mb.toFixed(1)} MB`;
+  if(f.size > INLINE_LIMIT){
+    $("audioInfo").innerHTML += `<br><span style="color:var(--danger)">18MBを超えています。章を分けて録音し直してください。</span>`;
+    btn.disabled = true;
+  } else btn.disabled = false;
+};
+
+$("btnTranscribe").dataset.label = "文字起こしを始める";
+$("btnTranscribe").onclick = async ()=>{
+  const f = $("audio").files[0];
+  if(!f) return;
+  const btn = $("btnTranscribe");
+  busy(btn,true,"聞き取っています");
+  try{
+    const b64 = await toBase64(f);
+    const mime = f.type && f.type.startsWith("audio") ? f.type : "audio/mp4";
+    const r = await callGemini(
+      [{inlineData:{mimeType:mime, data:b64}}, {text:TRANSCRIBE_PROMPT}], 0.1
+    );
+    state.trans = r; state.audioName = f.name;
+    await fillStep2(r);
+    setStep(2);
+  }catch(err){ msg($("audioInfo"), err.message, true); }
+  finally{ busy(btn,false); }
+};
+
+async function fillStep2(r){
+  $("confNote").innerHTML = r.confidence_note
+    ? `<div class="note">聞き取りが不確実な箇所：${esc(r.confidence_note)}</div>` : "";
+
+  const books = await getAll("books");
+  const sel = $("bookSel");
+  sel.innerHTML = `<option value="">＋ 新しい本として登録する</option>` +
+    books.map(b=>`<option value="${esc(b.book_id)}">${esc(b.title)}</option>`).join("");
+  const hit = books.find(b=>String(b.title).trim()===String(r.title||"").trim());
+  sel.value = hit ? hit.book_id : "";
+  sel.onchange = ()=> $("newBookBox").style.display = sel.value ? "none" : "";
+  sel.onchange();
+
+  $("fGenre").innerHTML = CATEGORIES.map(c=>`<option>${esc(c)}</option>`).join("");
+  $("fTitle").value = r.title||""; $("fAuthor").value = r.author||"";
+  $("fChapNo").value = r.chapter_no||""; $("fChapTitle").value = r.chapter_title||"";
+  $("fBody").value = r.body_text||""; $("fComment").value = r.my_comment||"";
+  countChars();
+}
+const countChars = ()=> $("charCount").textContent =
+  `本文 ${$("fBody").value.length.toLocaleString()} 字 ／ 所感 ${$("fComment").value.length.toLocaleString()} 字`;
+$("fBody").oninput = $("fComment").oninput = countChars;
+
+$("btnBack2").onclick = ()=> setStep(1);
+
+$("btnMeta").dataset.label = "要約とタグを作る";
+$("btnMeta").onclick = async ()=>{
+  const body = $("fBody").value.trim();
+  if(!body){ alert("本文が空です。"); return; }
+  const btn = $("btnMeta");
+  busy(btn,true,"整理しています");
+  try{
+    const tags = (await getAll("tags")).sort((a,b)=>b.count-a.count).map(t=>t.tag);
+    const prior = await priorContext($("bookSel").value);
+    const m = await callGemini(
+      [{text: metaPrompt(body, $("fComment").value, tags, prior)}], 0.3);
+    state.meta = m;
+    fillStep3(m, tags, prior);
+    setStep(3);
+  }catch(err){ alert(err.message); }
+  finally{ busy(btn,false); }
+};
+
+function fillStep3(m, existingTags, prior){
+  $("mShort").value   = m.short_summary||"";
+  $("mSummary").value = m.summary||"";
+  $("mPoints").value  = (m.key_points||[]).join("\n");
+  $("mFlow").value    = m.context_flow||"";
+  $("mShift").value   = m.thought_shift||"";
+  $("flowHint").textContent = prior
+    ? "この本の既読章を読み比べて書かれています。"
+    : "この本の最初の章なので、起点として記録されます。";
+
+  const opt = extra => CATEGORIES.map(c=>`<option>${esc(c)}</option>`).join("") + (extra||"");
+  $("mCat1").innerHTML = opt();
+  $("mCat2").innerHTML = `<option value="">（なし）</option>` + opt();
+  $("mCat1").value = CATEGORIES.includes(m.category_1) ? m.category_1 : CATEGORIES[0];
+  $("mCat2").value = CATEGORIES.includes(m.category_2) ? m.category_2 : "";
+
+  const tags = m.tags||[];
+  $("mTags").value = tags.join(", ");
+  const fresh = tags.filter(t=>!existingTags.includes(t));
+  $("tagHint").textContent = fresh.length
+    ? `新しく作られたタグ：${fresh.join("、")}` : "すべて既存タグから選ばれました。";
+
+  $("qaBox").innerHTML = (m.qa||[]).map((qa,i)=>`
+    <div class="qa-item">
+      <input type="text" id="q${i}" value="${esc(qa.q)}">
+      <textarea id="a${i}" style="min-height:64px;margin-top:5px">${esc(qa.a)}</textarea>
+    </div>`).join("");
+
+  $("mImp").value = m.importance||3;
+  $("impVal").textContent = $("mImp").value;
+  $("mImp").oninput = ()=> $("impVal").textContent = $("mImp").value;
+}
+
+$("btnBack3").onclick = ()=> setStep(2);
+
+$("btnSave").dataset.label = "書架に収める";
+$("btnSave").onclick = async ()=>{
+  const btn = $("btnSave");
+  busy(btn,true,"収蔵しています");
+  try{
+    let bookId = $("bookSel").value;
+    if(!bookId){
+      const books = await getAll("books");
+      bookId = nextId(books,"book_id","B",4);
+      await put("books",{
+        book_id:bookId, title:$("fTitle").value.trim()||"（無題）",
+        author:$("fAuthor").value.trim(), publisher:"", published_year:"",
+        genre:$("fGenre").value, purpose:$("fPurpose").value.trim(),
+        overall_summary:"", rating:"", status:"読書中",
+        created_at:nowStr(), updated_at:nowStr()
+      });
+    }
+
+    const chunks = await getAll("chunks");
+    const chunkId = nextId(chunks,"chunk_id","C",5);
+    const tags = $("mTags").value.split(",").map(s=>s.trim()).filter(Boolean);
+    const qa = [...$("qaBox").querySelectorAll(".qa-item")].map((_,i)=>
+      ({q:$("q"+i).value, a:$("a"+i).value}));
+
+    await put("chunks",{
+      chunk_id:chunkId, book_id:bookId,
+      chapter_no:$("fChapNo").value.trim(), chapter_title:$("fChapTitle").value.trim(),
+      recorded_at:todayStr(), audio_file_name:state.audioName,
+      body_text:$("fBody").value, my_comment:$("fComment").value,
+      short_summary:$("mShort").value, summary:$("mSummary").value,
+      key_points:$("mPoints").value.split("\n").filter(Boolean),
+      context_flow:$("mFlow").value, thought_shift:$("mShift").value,
+      category_1:$("mCat1").value, category_2:$("mCat2").value,
+      tags, qa, importance:Number($("mImp").value),
+      char_count:$("fBody").value.length,
+      prompt_version:PROMPT_VERSION, status:"確定", embedding:"",
+      created_at:nowStr(), updated_at:nowStr()
+    });
+
+    for(const t of tags){
+      const cur = await getOne("tags",t);
+      await put("tags", cur
+        ? {...cur, count:cur.count+1}
+        : {tag:t, count:1, first_used:todayStr(), note:""});
+    }
+
+    $("savedMsg").textContent = `${chunkId}として収めました。控えは設定タブから書き出せます。`;
+    setStep(4);
+  }catch(err){ alert(err.message); }
+  finally{ busy(btn,false); }
+};
+
+$("btnNext").onclick = ()=>{
+  state = {trans:null, meta:null, audioName:""};
+  $("audio").value = ""; $("audioInfo").textContent = "";
+  $("btnTranscribe").disabled = true;
+  setStep(1);
+};
+
+/* =====================================================================
+   書架
+===================================================================== */
+let openBook = null;
+
+async function renderShelf(){
+  const books  = await getAll("books");
+  const chunks = await getAll("chunks");
+  const shelf  = $("shelf");
+
+  if(!books.length){
+    shelf.innerHTML = `<div class="shelf-empty">まだ1冊もありません。取り込みタブから最初の章を読み込んでください。</div>`;
+    $("bookDetail").innerHTML = ""; return;
+  }
+
+  shelf.innerHTML = books.map(b=>{
+    const cs = chunks.filter(c=>c.book_id===b.book_id);
+    const segs = cs.map(c=>`<div class="seg${c.importance>=4?" hi":""}"></div>`).join("");
+    return `<button class="spine${openBook===b.book_id?" on":""}" data-b="${esc(b.book_id)}"
+              title="${esc(b.title)}（${cs.length}章）">
+              ${segs}<span class="ttl">${esc(b.title)}</span></button>`;
+  }).join("");
+
+  shelf.querySelectorAll(".spine").forEach(el=>{
+    el.onclick = ()=>{ openBook = el.dataset.b; renderShelf(); };
+  });
+
+  if(openBook) renderBook(books, chunks);
+}
+
+function renderBook(books, chunks){
+  const b = books.find(x=>x.book_id===openBook);
+  if(!b){ $("bookDetail").innerHTML=""; return; }
+  const cs = sortChunks(chunks.filter(c=>c.book_id===b.book_id));
+
+  const stale = b.storyline && Number(b.storyline_chapters) !== cs.length;
+
+  $("bookDetail").innerHTML = `
+    <div class="card">
+      <h2>${esc(b.title)}</h2>
+      <p class="lede">${esc(b.author||"著者不明")} ／ ${esc(b.genre)} ／ ${cs.length}章 ／ 計${cs.reduce((s,c)=>s+(c.char_count||0),0).toLocaleString()}字</p>
+      ${b.purpose ? `<div class="note">読む目的：${esc(b.purpose)}</div>` : ""}
+
+      <div id="storyBox">
+        ${b.storyline ? `
+          <h3 style="font-family:var(--serif);font-size:15px;margin:20px 0 4px">ここまでの流れ</h3>
+          <div class="meta mono">${esc(b.storyline_chapters)}章時点 ／ ${esc(b.storyline_at||"")}</div>
+          ${stale ? `<div class="note">その後 ${cs.length - Number(b.storyline_chapters)} 章が加わっています。作り直してください。</div>` : ""}
+          <p style="white-space:pre-wrap;font-size:14px">${esc(b.storyline)}</p>` : ""}
+        <div class="actions">
+          <button class="btn ghost" id="btnStory">${b.storyline ? "流れを作り直す" : "ここまでの流れをまとめる"}</button>
+        </div>
+      </div>
+
+      ${cs.map(c=>`
+        <div class="chunk">
+          <h3>${esc(c.chapter_no)} ${esc(c.chapter_title)}</h3>
+          <div class="meta">${esc(c.chunk_id)} ／ ${esc(c.recorded_at)} ／ 重要度 ${c.importance}</div>
+          <div>${[c.category_1,c.category_2].filter(Boolean).map(x=>`<span class="tag cat">${esc(x)}</span>`).join("")}
+               ${(c.tags||[]).map(t=>`<span class="tag">${esc(t)}</span>`).join("")}</div>
+          ${c.context_flow ? `<div class="src" style="border-left-color:var(--mustard);background:#FBF6EA"><strong>流れ</strong><br>${esc(c.context_flow)}</div>` : ""}
+          ${c.thought_shift ? `<div class="src"><strong>考えの変化</strong><br>${esc(c.thought_shift)}</div>` : ""}
+          <p>${esc(c.summary)}</p>
+          <details><summary>要点とQ&amp;A</summary>
+            <ul style="font-size:13px">${(c.key_points||[]).map(p=>`<li>${esc(p)}</li>`).join("")}</ul>
+            ${(c.qa||[]).map(q=>`<div class="qa-item"><strong style="font-size:13px">${esc(q.q)}</strong><p>${esc(q.a)}</p></div>`).join("")}
+          </details>
+          <details><summary>本文と所感</summary>
+            <div class="body-text">${esc(c.body_text)}</div>
+            ${c.my_comment ? `<div class="src" style="margin-top:9px"><strong>所感</strong><br>${esc(c.my_comment)}</div>` : ""}
+          </details>
+        </div>`).join("")}
+    </div>`;
+
+  const sb = $("btnStory");
+  sb.dataset.label = sb.textContent;
+  sb.onclick = ()=> buildStoryline(b, cs, sb);
+}
+
+/* この本の全章から、議論の流れと自分の考えの推移をまとめ直す */
+async function buildStoryline(book, cs, btn){
+  if(!cs.length){ alert("章がまだありません。"); return; }
+  busy(btn,true,"読み返しています");
+  try{
+    const material = cs.map(c=>
+`■ ${c.chapter_no} ${c.chapter_title}
+　要約: ${c.summary}
+　要点: ${(c.key_points||[]).join(" ／ ")}
+　当時の所感: ${c.my_comment || "（記録なし）"}`).join("\n\n");
+
+    const text = await callGemini([{text:`
+以下は『${book.title}』（${book.author||"著者不明"}）を私が章ごとに読み進めた記録です。章番号順に並んでいます。
+
+${material}
+
+【依頼】
+この本の議論が章を追ってどう展開してきたかを、ひとつながりの文章でまとめてください。
+
+【書き方】
+- 前半で「本の議論の流れ」を書く。各章の要約を並べるのではなく、
+  何を前提として次に何を積み上げたのか、論の運びが見えるように書く
+- 後半で「私の理解の変化」を書く。所感の記録を時系列で読み、
+  どこで納得し、どこで引っかかり、考えがどう動いたかを具体的に指摘する
+  所感の記録が乏しい場合は、その旨を短く述べるだけでよい
+- 全体で700字程度。見出しや箇条書きは使わず、文章のみ
+- まだ途中までしか読まれていない場合は、断定せず「ここまでは」という書き方にする`}], 0.45, false);
+
+    await put("books", {...book, storyline:text, storyline_chapters:cs.length,
+      storyline_at:todayStr(), updated_at:nowStr()});
+    renderShelf();
+  }catch(err){ alert(err.message); busy(btn,false); }
+}
+
+/* =====================================================================
+   問う（2段階検索）
+===================================================================== */
+let selectedTags = new Set();
+
+async function renderAskTags(){
+  const tags = (await getAll("tags")).sort((a,b)=>b.count-a.count);
+  $("askTags").innerHTML = tags.length
+    ? tags.map(t=>`<button class="tag${selectedTags.has(t.tag)?" sel":""}" data-t="${esc(t.tag)}">${esc(t.tag)} ${t.count}</button>`).join("")
+    : `<span class="hint">章を収めるとタグが並びます。</span>`;
+  $("askTags").querySelectorAll("button").forEach(b=>{
+    b.onclick = ()=>{
+      const t = b.dataset.t;
+      selectedTags.has(t) ? selectedTags.delete(t) : selectedTags.add(t);
+      renderAskTags();
+    };
+  });
+}
+
+$("btnAsk").dataset.label = "問う";
+$("btnAsk").onclick = async ()=>{
+  const q = $("askQ").value.trim();
+  if(!q){ alert("質問を入力してください。"); return; }
+  const btn = $("btnAsk"), out = $("askResult");
+  busy(btn,true,"探しています");
+  try{
+    let chunks = await getAll("chunks");
+    if(!chunks.length) throw new Error("まだ章が1つもありません。");
+    if(selectedTags.size)
+      chunks = chunks.filter(c=>(c.tags||[]).some(t=>selectedTags.has(t)));
+    if(!chunks.length) throw new Error("選んだタグに該当する章がありません。");
+
+    const books = await getAll("books");
+    const titleOf = id => (books.find(b=>b.book_id===id)||{}).title || "";
+
+    // --- 第1段階：関連する章を選ぶ ---
+    const index = chunks.map(c=>
+      `${c.chunk_id} | ${titleOf(c.book_id)} | ${c.chapter_no} ${c.chapter_title} | ${c.short_summary} | ${(c.tags||[]).join("、")}`
+    ).join("\n");
+
+    const picked = await callGemini([{text:`
+以下は蓄積された読書メモの索引です。1行が1章を表します。
+形式: chunk_id | 書名 | 章 | 一言要約 | タグ
+
+${index}
+
+【質問】${q}
+
+この質問に答えるために本文を読むべき章を、関連性の高い順に最大6件選んでください。
+関連しそうな章が1つも無い場合は空配列を返してください。
+出力はJSONのみ: {"chunk_ids":["C00001"]}`}], 0.2);
+
+    const ids = picked.chunk_ids || [];
+    if(!ids.length){ out.innerHTML = `<div class="card"><div class="note bad">この質問に関係する章が見つかりませんでした。タグの絞り込みを外すか、言い方を変えてみてください。</div></div>`; return; }
+
+    // --- 第2段階：本文を読んで答える ---
+    const hits = ids.map(id=>chunks.find(c=>c.chunk_id===id)).filter(Boolean);
+    const context = hits.map(c=>`
+━━━ ${c.chunk_id}｜『${titleOf(c.book_id)}』 ${c.chapter_no} ${c.chapter_title} ━━━
+【本の中でのこの章の位置づけ】
+${c.context_flow || "（記録なし）"}
+【本文】
+${c.body_text}
+【この章に対する私の所感】
+${c.my_comment || "（なし）"}
+${c.thought_shift ? `【この時点での私の考えの変化】\n${c.thought_shift}` : ""}`).join("\n\n");
+
+    const answer = await callGemini([{text:`
+あなたは私の読書メモを熟知した相談相手です。以下は私が音読して蓄積した本の内容と、私自身の所感です。
+
+${context}
+
+【質問】${q}
+
+【回答の指針】
+- 上記の内容だけを根拠に答える。書かれていないことは推測せず「メモには無い」と述べる
+- 出典を『書名』章タイトル の形で必ず示す
+- 本の内容と、私自身の所感は区別して述べる。所感に触れるときは「あなたは当時こう考えていた」と示す
+- 複数の本にまたがる場合は、共通点と相違点を整理する
+- 簡潔に、しかし具体的に`}], 0.4, false);
+
+    out.innerHTML = `
+      <div class="card">
+        <h2>回答</h2>
+        <div class="answer">${esc(answer)}</div>
+      </div>
+      <div class="card">
+        <h2>読んだ章</h2>
+        ${hits.map(c=>`<div class="src"><strong>『${esc(titleOf(c.book_id))}』${esc(c.chapter_no)} ${esc(c.chapter_title)}</strong><br>${esc(c.short_summary)}</div>`).join("")}
+      </div>`;
+  }catch(err){ msg(out, err.message, true); }
+  finally{ busy(btn,false); }
+};
+
+/* =====================================================================
+   資料（Word互換 .doc）
+===================================================================== */
+async function renderReportBooks(){
+  const books = await getAll("books");
+  $("repBook").innerHTML = books.length
+    ? books.map(b=>`<option value="${esc(b.book_id)}">${esc(b.title)}</option>`).join("")
+    : `<option value="">（本がまだありません）</option>`;
+}
+
+$("btnReport").dataset.label = "レポートを書き出す";
+$("btnReport").onclick = async ()=>{
+  const id = $("repBook").value;
+  if(!id){ alert("先に章を取り込んでください。"); return; }
+  const btn = $("btnReport"), out = $("repResult");
+  busy(btn,true,"組み立てています");
+  try{
+    const book = await getOne("books",id);
+    const cs = sortChunks((await getAll("chunks")).filter(c=>c.book_id===id));
+    if(!cs.length) throw new Error("この本にはまだ章がありません。");
+
+    let overview = book.overall_summary || "";
+    if($("repOverview").checked){
+      overview = await callGemini([{text:`
+以下は『${book.title}』（${book.author}）の各章の要約です。
+
+${cs.map(c=>`■ ${c.chapter_no} ${c.chapter_title}\n${c.summary}`).join("\n\n")}
+
+この本全体を通した主張と構成を、600字程度で説明してください。
+章の羅列ではなく、本全体が何を言おうとしているかを筋道立てて書いてください。
+見出しや箇条書きは使わず、文章のみで出力してください。`}], 0.4, false);
+      await put("books",{...book, overall_summary:overview, updated_at:nowStr()});
+    }
+
+    const allTags = [...new Set(cs.flatMap(c=>c.tags||[]))];
+    const html = buildDoc(book, cs, overview, allTags);
+    download(`${book.title}_要約レポート.doc`, html,
+             "application/msword;charset=utf-8");
+
+    out.innerHTML = `<div class="card"><div class="note">${esc(book.title)}のレポートを書き出しました（${cs.length}章）。</div></div>`;
+  }catch(err){ msg(out, err.message, true); }
+  finally{ busy(btn,false); }
+};
+
+function buildDoc(book, cs, overview, tags){
+  const p = t => `<p>${esc(t).replace(/\n/g,"<br>")}</p>`;
+  return `<!DOCTYPE html><html xmlns:w="urn:schemas-microsoft-com:office:word"><head>
+<meta charset="utf-8"><title>${esc(book.title)}</title>
+<style>
+body{font-family:"Yu Mincho","Hiragino Mincho ProN",serif;font-size:10.5pt;line-height:1.9}
+h1{font-size:20pt;border-bottom:2px solid #1F3A5F;padding-bottom:8pt}
+h2{font-size:14pt;color:#1F3A5F;border-left:5px solid #C98A1F;padding-left:9pt;margin-top:26pt}
+h3{font-size:12pt;margin-top:20pt}
+.cover{margin-bottom:40pt}
+.meta{color:#555;font-size:9pt}
+.q{font-weight:bold;margin-bottom:0}
+.a{margin-top:2pt;margin-left:12pt}
+.tags{font-size:9pt;color:#4A6B52}
+blockquote{border-left:3px solid #4A6B52;margin-left:0;padding-left:12pt;color:#333}
+.flow{background:#FBF6EA;border-left:3px solid #C98A1F;padding:6pt 10pt;font-size:9.5pt}
+</style></head><body>
+
+<div class="cover">
+<h1>${esc(book.title)}</h1>
+<p class="meta">${esc(book.author||"")}${book.genre?"　／　"+esc(book.genre):""}<br>
+全${cs.length}章　／　総文字数 ${cs.reduce((s,c)=>s+(c.char_count||0),0).toLocaleString()}字<br>
+作成日 ${todayStr()}</p>
+${book.purpose ? `<p class="meta">読む目的：${esc(book.purpose)}</p>` : ""}
+</div>
+
+${overview ? `<h2>本書の概要</h2>${p(overview)}` : ""}
+
+${book.storyline ? `<h2>ここまでの流れ</h2>
+<p class="meta">${esc(book.storyline_chapters)}章時点でまとめたもの（${esc(book.storyline_at||"")}）</p>
+${p(book.storyline)}` : ""}
+
+<h2>章ごとのまとめ</h2>
+${cs.map(c=>`
+<h3>${esc(c.chapter_no)}　${esc(c.chapter_title)}</h3>
+<p class="tags">${[c.category_1,c.category_2].filter(Boolean).join(" / ")}${(c.tags||[]).length?"　—　"+esc((c.tags||[]).join("、")):""}</p>
+${c.context_flow?`<p class="flow"><strong>流れ</strong>　${esc(c.context_flow)}</p>`:""}
+${p(c.summary)}
+<ul>${(c.key_points||[]).map(k=>`<li>${esc(k)}</li>`).join("")}</ul>
+${c.thought_shift?`<p class="flow"><strong>考えの変化</strong>　${esc(c.thought_shift)}</p>`:""}
+${c.my_comment?`<blockquote><strong>所感</strong><br>${esc(c.my_comment).replace(/\n/g,"<br>")}</blockquote>`:""}
+`).join("")}
+
+<h2>重要キーワード</h2>
+<p class="tags">${esc(tags.join("　／　"))}</p>
+
+<h2>想定Q&amp;A</h2>
+${cs.map(c=>(c.qa||[]).map(q=>
+  `<p class="q">Q. ${esc(q.q)}</p><p class="a">A. ${esc(q.a)}<br><span class="meta">（${esc(c.chapter_no)} ${esc(c.chapter_title)}）</span></p>`
+).join("")).join("")}
+
+</body></html>`;
+}
+
+function download(name, content, type){
+  const blob = new Blob(["\ufeff"+content],{type});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = name; a.click();
+  setTimeout(()=>URL.revokeObjectURL(url), 4000);
+}
+
+/* =====================================================================
+   設定
+===================================================================== */
+$("btnSaveKey").onclick = async ()=>{
+  await setSetting("apiKey", $("apiKey").value.trim());
+  msg($("keyMsg"), "鍵を保存しました。");
+};
+$("btnTestKey").dataset.label = "接続を試す";
+$("btnTestKey").onclick = async ()=>{
+  const btn = $("btnTestKey");
+  busy(btn,true,"試しています");
+  try{
+    await setSetting("apiKey", $("apiKey").value.trim());
+    const r = await callGemini([{text:'必ず {"ok":true} とだけ返してください。'}], 0);
+    msg($("keyMsg"), r.ok ? "Geminiに接続できました。" : "応答はありましたが内容が想定外です。");
+  }catch(err){ msg($("keyMsg"), err.message, true); }
+  finally{ busy(btn,false); }
+};
+
+/* 3段階のプローブで、どこで通信が止まっているかを特定する */
+$("btnDiag").dataset.label = "接続を診断する";
+$("btnDiag").onclick = async ()=>{
+  const btn = $("btnDiag"), out = $("diagOut");
+  const key = $("apiKey").value.trim();
+  out.style.display = "";
+  busy(btn,true,"診断しています");
+
+  const L = [];
+  L.push("ページの出所 : " + (location.protocol==="file:" ? "file://（直接開いています）" : location.origin));
+  L.push("ブラウザ     : " + navigator.userAgent.slice(0,110));
+  L.push("APIキー      : " + (key ? key.slice(0,6)+"…（"+key.length+"文字）" : "未入力"));
+  L.push("");
+
+  const base = "https://generativelanguage.googleapis.com/v1beta";
+
+  // ① 単純GET：プリフライトが起きない。ここが落ちるなら通信自体が遮断されている
+  try{
+    const r = await fetch(`${base}/models?key=${encodeURIComponent(key)}`);
+    L.push(`① モデル一覧の取得(GET) : HTTP ${r.status} ${r.ok?"成功":"失敗"}`);
+    if(!r.ok) L.push("   " + (await r.text()).slice(0,200));
+  }catch(e){
+    L.push("① モデル一覧の取得(GET) : 通信が届きませんでした（" + e.message + "）");
+  }
+
+  // ② POST + application/json：プリフライトが発生する
+  const probe = JSON.stringify({contents:[{parts:[{text:"ping"}]}],
+    generationConfig:{maxOutputTokens:16}});
+  for(const [n,ct] of [["②","application/json"],["③","text/plain;charset=UTF-8"]]){
+    try{
+      const r = await fetch(`${base}/models/${MODEL}:generateContent?key=${encodeURIComponent(key)}`,
+        {method:"POST", headers:{"Content-Type":ct}, body:probe});
+      L.push(`${n} 生成リクエスト(${ct.split(";")[0]}) : HTTP ${r.status} ${r.ok?"成功":"失敗"}`);
+      if(!r.ok) L.push("   " + (await r.text()).slice(0,200));
+    }catch(e){
+      L.push(`${n} 生成リクエスト(${ct.split(";")[0]}) : 通信が届きませんでした（${e.message}）`);
+    }
+  }
+
+  L.push("");
+  L.push("―― 読み方 ――");
+  L.push("①も失敗 : ネットワークかキーの問題。別タブで直接URLを開いて確認してください");
+  L.push("①成功 ②失敗 ③成功 : プリフライトが遮断されています。アプリは③で動きます");
+  L.push("①成功 ②③失敗 : 拡張機能かコンテンツブロッカーが疑わしいです");
+  L.push("すべて成功 : 通信は正常。エラーが続くなら内容をそのまま共有してください");
+
+  out.textContent = L.join("\n");
+  busy(btn,false);
+};
+
+async function renderStat(){
+  const [books, chunks, tags] = await Promise.all([getAll("books"),getAll("chunks"),getAll("tags")]);
+  const chars = chunks.reduce((s,c)=>s+(c.char_count||0),0);
+  $("stat").textContent = `${books.length}冊 ／ ${chunks.length}章 ／ ${tags.length}タグ ／ ${chars.toLocaleString()}字`;
+  $("apiKey").value = await getSetting("apiKey");
+}
+
+$("btnExport").onclick = async ()=>{
+  const data = {
+    exported_at: nowStr(), version: 1,
+    books: await getAll("books"), chunks: await getAll("chunks"), tags: await getAll("tags")
+  };
+  download(`音読書架_${todayStr()}.json`, JSON.stringify(data,null,2), "application/json");
+};
+
+$("btnImportPick").onclick = ()=> $("importFile").click();
+$("importFile").onchange = async e=>{
+  const f = e.target.files[0]; if(!f) return;
+  try{
+    const data = JSON.parse(await f.text());
+    if(!data.books || !data.chunks) throw new Error("この形式のファイルは読み込めません。");
+    if(!confirm(`${data.books.length}冊 / ${data.chunks.length}章 を読み込みます。同じIDの記録は上書きされます。`)) return;
+    for(const b of data.books)  await put("books",b);
+    for(const c of data.chunks) await put("chunks",c);
+    for(const t of (data.tags||[])) await put("tags",t);
+    alert("読み込みました。");
+    renderStat();
+  }catch(err){ alert(err.message); }
+  finally{ e.target.value = ""; }
+};
+
+$("btnWipe").onclick = async ()=>{
+  if(!confirm("すべての本・章・タグ・鍵を削除します。取り消せません。続けますか？")) return;
+  if(!confirm("本当に削除しますか？　先にJSONへ書き出すことを強くおすすめします。")) return;
+  await Promise.all(["books","chunks","tags","settings"].map(clearS));
+  openBook = null; selectedTags.clear();
+  alert("削除しました。");
+  renderStat();
+};
+
+/* =====================================================================
+   起動
+===================================================================== */
+(async ()=>{
+  try{
+    await openDB();
+    await renderStat();
+
+    if(location.protocol === "file:"){
+      document.querySelector('#nav button[data-p="settings"]').click();
+      $("keyMsg").innerHTML = `<div class="note bad">
+        <strong>このままではGeminiに接続できません。</strong><br>
+        ファイルを直接開いた状態（file://）では、ブラウザが外部への通信を遮断します。
+        記録の保存はできますが、文字起こしと質問は動きません。<br><br>
+        <strong>対処：</strong>ファイルのあるフォルダで
+        <code>python3 -m http.server 8000</code> を実行し、
+        <code>http://localhost:8000/ondoku-shoka.html</code> を開いてください。
+        iPhoneからも使うなら、Netlify DropかGitHub Pagesに置くのが確実です。
+      </div>`;
+      return;
+    }
+
+    if(!(await getSetting("apiKey"))){
+      document.querySelector('#nav button[data-p="settings"]').click();
+      msg($("keyMsg"), "まずGemini APIキーを設定してください。");
+    }
+  }catch(err){
+    document.body.innerHTML =
+      `<main><div class="card"><div class="note bad">${esc(err.message)}</div></div></main>`;
+  }
+})();
+</script>
+</body>
+</html>
