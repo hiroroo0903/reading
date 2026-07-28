@@ -201,41 +201,60 @@ details[open] summary{margin-bottom:7px}
   <div id="s1">
     <div class="card">
       <h2>音読した内容を入れる</h2>
-      <p class="lede">読み上げた文字を直接入れるか、録音ファイルから起こします。</p>
+      <p class="lede">録音ファイルから起こすか、読み上げた文字を直接入れます。</p>
 
-      <div id="modeSw" style="margin-bottom:14px">
-        <button class="tag sel" data-m="text">文字で入れる</button>
-        <button class="tag" data-m="audio">音声ファイルから</button>
+      <label for="hintText">聞き取りのヒント（任意だが効果は大きい）</label>
+      <textarea id="hintText" style="min-height:76px"
+        placeholder="書名、著者名、登場する専門用語や人名を書いておくと、その表記が優先されます。&#10;例：ソフトウェアアーキテクチャの基礎、マーク・リチャーズ、モジュラーモノリス、境界づけられたコンテキスト"></textarea>
+      <div class="hint">固有名詞の誤変換はここで大きく減ります。同じ本の次の章でも使い回せます。</div>
+
+      <div id="modeSw" style="margin:18px 0 14px">
+        <button class="tag sel" data-m="audio">音声ファイルから</button>
+        <button class="tag" data-m="text">文字で入れる</button>
       </div>
 
-      <div id="mText">
+      <div id="mAudio">
+        <div id="recBox" style="background:#fff;border:1px solid var(--line);border-radius:3px;padding:16px">
+          <div style="display:flex;align-items:center;gap:14px">
+            <button class="btn" id="btnRec" style="flex:0 0 auto">録音を始める</button>
+            <span class="mono" id="recTime" style="font-size:19px;letter-spacing:.06em">00:00</span>
+            <button class="btn ghost mini" id="btnPause" style="display:none;margin:0">一時停止</button>
+          </div>
+          <audio id="recPlay" controls style="display:none;width:100%;margin-top:12px"></audio>
+          <div class="hint" id="recInfo">録音中は画面を消さないでください。iPhoneでは画面を消すと録音が止まります。</div>
+        </div>
+
+        <details style="margin-top:12px">
+          <summary style="font-size:13px;color:var(--ink);cursor:pointer">録音済みのファイルを使う</summary>
+          <input type="file" id="audio" accept="audio/*" style="margin-top:9px">
+        </details>
+
+        <div id="audioInfo" class="hint"></div>
+        <div class="actions">
+          <button class="btn" id="btnTranscribe" disabled>文字起こしを始める</button>
+        </div>
+      </div>
+
+      <div id="mText" style="display:none">
         <label for="rawText">音読したテキスト</label>
-        <textarea id="rawText" style="min-height:260px"
+        <textarea id="rawText" style="min-height:240px"
           placeholder="キーボードのマイクを押して読み上げてください。書き起こし済みのテキストを貼り付けても構いません。"></textarea>
         <div class="hint" id="rawInfo">0 字</div>
         <div class="actions">
           <button class="btn" id="btnCorrect" disabled>文字を整える</button>
         </div>
       </div>
-
-      <div id="mAudio" style="display:none">
-        <input type="file" id="audio" accept="audio/*">
-        <div id="audioInfo" class="hint"></div>
-        <div class="actions">
-          <button class="btn" id="btnTranscribe" disabled>文字起こしを始める</button>
-        </div>
-      </div>
     </div>
 
     <details class="card">
-      <summary>読み上げかた</summary>
+      <summary>録音のしかた</summary>
       <ol style="font-size:13px;padding-left:20px;margin:8px 0 0">
         <li>冒頭に「書名『◯◯』、著者△△、第1章『□□』」と言う</li>
         <li>本文を読み上げる</li>
         <li><strong>「ここから所感」</strong>と言う</li>
         <li>自分の考えを話す</li>
       </ol>
-      <p class="hint">誤変換はこの時点で直さなくて構いません。次の画面でまとめて整えます。</p>
+      <p class="hint">録音は取り込みにだけ使い、保存はしません。ボイスメモ側に残しておいてください。</p>
     </details>
   </div>
 
@@ -420,7 +439,6 @@ details[open] summary{margin-bottom:7px}
 ===================================================================== */
 const PROMPT_VERSION = "v1.0";
 const MODEL = "gemini-2.5-flash";
-const INLINE_LIMIT = 18 * 1024 * 1024;
 
 const CATEGORIES = [
   "経営・戦略","組織・マネジメント","マーケティング・営業","財務・会計",
@@ -565,7 +583,21 @@ const toBase64 = file => new Promise((ok,ng)=>{
 });
 
 /* ---------- プロンプト ---------- */
-const TRANSCRIBE_PROMPT = `
+/* 事前に分かっている語をプロンプトに差し込む。固有名詞の誤変換を抑える要。 */
+function vocabBlock(hints, tags){
+  const h = (hints||"").trim();
+  const t = (tags||[]).slice(0,50);
+  if(!h && !t.length) return "";
+  return `
+【この内容に出てくる可能性が高い語】
+音が近い箇所は、以下の表記を優先してください。列挙されていない語を無理に当てはめる必要はありません。
+${h ? "・書き手が登録した語: " + h.replace(/\n/g,"、") : ""}
+${t.length ? "・過去の記録で使われている語: " + t.join("、") : ""}
+`;
+}
+
+function transcribePrompt(hints, tags){
+  return `
 あなたは読書記録の文字起こし専門家です。
 この音声は、ある人物が書籍を章単位で音読し、その後に自分の所感を述べたものです。
 
@@ -574,7 +606,7 @@ const TRANSCRIBE_PROMPT = `
 2. 続いて本文を読み上げている
 3. 「ここから所感」などの区切り宣言がある
 4. その後は本人のコメント・感想
-
+${vocabBlock(hints, tags)}
 【あなたの仕事】
 1. 音声を正確に文字起こしする
 2. 音声を聞いた上で、誤変換・同音異義語を文脈から正しく判断して修正する
@@ -587,6 +619,9 @@ const TRANSCRIBE_PROMPT = `
 8. 区切り宣言の前後で本文と所感を分離する（宣言が無ければ my_comment は空文字）
 9. 宣言部分そのもの（「書名○○、第3章」等）は body_text に含めない
 
+【重要】聞き取りに確信が持てなかった語は、最も自然な表記を採用した上で
+confidence_note に列挙すること。書き手が後で確認できるようにするのが目的です。
+
 【出力形式】以下のJSONのみを出力する。説明文やコードブロック記号は付けない。
 {
   "title":"書名",
@@ -595,39 +630,12 @@ const TRANSCRIBE_PROMPT = `
   "chapter_title":"章タイトル（不明なら空文字）",
   "body_text":"整形済みの本文。改行で段落分けする",
   "my_comment":"所感パート。無ければ空文字",
-  "confidence_note":"聞き取りが不確実だった箇所を簡潔に。無ければ空文字"
+  "confidence_note":"聞き取りが不確実だった語を簡潔に列挙。無ければ空文字"
 }`.trim();
-
-/* 章番号で自然順に並べる（「第3章」「3-2」などに対応） */
-function chapKey(c){
-  const m = String(c.chapter_no||"").match(/\d+(?:[-.]\d+)*/);
-  return m ? m[0].split(/[-.]/).map(Number) : [Number.MAX_SAFE_INTEGER];
-}
-function cmpChap(a,b){
-  const x = chapKey(a), y = chapKey(b);
-  for(let i=0;i<Math.max(x.length,y.length);i++){
-    const d = (x[i]||0)-(y[i]||0); if(d) return d;
-  }
-  return String(a.chunk_id).localeCompare(String(b.chunk_id));
-}
-function sortChunks(cs){ return [...cs].sort(cmpChap); }
-
-/* 同じ本の既読章を、議論の流れを追える形にまとめる。
-   before を渡すと、その章より前のものだけを対象にする（作り直し用）。 */
-async function priorContext(bookId, before){
-  if(!bookId) return "";
-  let cs = sortChunks((await getAll("chunks")).filter(c=>c.book_id===bookId));
-  if(before) cs = cs.filter(c=>c.chunk_id!==before.chunk_id && cmpChap(c,before)<0);
-  if(!cs.length) return "";
-  return cs.map(c=>
-`■ ${c.chapter_no} ${c.chapter_title}
-　要約: ${c.short_summary}
-　要点: ${(c.key_points||[]).join(" ／ ")}
-　当時の私の所感: ${c.my_comment ? c.my_comment.slice(0,400) : "（記録なし）"}`
-  ).join("\n\n");
 }
 
-const CORRECT_PROMPT = `
+function correctPrompt(hints, tags){
+  return `
 あなたは読書記録の編集者です。
 以下は、ある人物が書籍を章単位で音読し、続けて自分の所感を述べた内容を、
 音声入力でそのまま文字にしたものです。変換ミスや言い直しが多く含まれています。
@@ -637,13 +645,13 @@ const CORRECT_PROMPT = `
 2. 続いて本文を読み上げている
 3. 「ここから所感」などの区切りの言葉がある
 4. その後は本人のコメント・感想
-
+${vocabBlock(hints, tags)}
 【あなたの仕事】
 1. 音声入力による誤変換を、文脈から正しい表記に直す
    （例: 機械/機会、進化/深化、意思/意志、保証/保障、以外/意外、聞く/効く/訊く）
 2. 専門用語・カタカナ語・人名・書名を正しい表記に直す
 3. 句読点が欠けている箇所に適切に補う
-4. 「えー」「あの」「えっと」などのフィラー、明らかな言い直しや重複を削除する
+4. 「えー」「あの」などのフィラー、明らかな言い直しや重複を削除する
 5. 音声入力特有の助詞の欠落・崩れた語尾を、自然な書き言葉に整える
 6. 意味は絶対に変えない。要約も脚色も加筆もしない
 7. 読みやすいよう、意味のまとまりごとに改行を入れ、段落を分ける
@@ -652,7 +660,6 @@ const CORRECT_PROMPT = `
 10. 宣言部分そのもの（「書名○○、第3章」等）は body_text に含めない
 
 【重要】判断に迷った箇所は勝手に決めつけず、confidence_note に列挙すること。
-書き手が後で確認できるようにするのが目的です。
 
 【出力形式】以下のJSONのみを出力する。説明文やコードブロック記号は付けない。
 {
@@ -662,11 +669,12 @@ const CORRECT_PROMPT = `
   "chapter_title":"章タイトル（不明なら空文字）",
   "body_text":"整形済みの本文。改行で段落分けする",
   "my_comment":"所感パート。無ければ空文字",
-  "confidence_note":"直すか迷った箇所や、判断が割れそうな語を簡潔に列挙。無ければ空文字"
+  "confidence_note":"直すか迷った語を簡潔に列挙。無ければ空文字"
 }
 
 ===== 音声入力されたテキスト =====
 `.trim();
+}
 
 function metaPrompt(body, comment, tags, prior){
   const priorBlock = prior ? `
@@ -765,7 +773,7 @@ function busy(btn,on,label){
 /* =====================================================================
    取り込み
 ===================================================================== */
-let state = { trans:null, meta:null, audioName:"" };
+let state = { trans:null, meta:null };
 
 /* ---- 入力モードの切り替え ---- */
 $("modeSw").querySelectorAll("button").forEach(b=>{
@@ -789,8 +797,10 @@ $("btnCorrect").onclick = async ()=>{
   const btn = $("btnCorrect");
   busy(btn,true,"整えています");
   try{
-    const r = await callGemini([{text: CORRECT_PROMPT + "\n" + raw}], 0.1);
-    state.trans = r; state.audioName = "（音声入力）";
+    const tags = (await getAll("tags")).sort((a,b)=>b.count-a.count).map(t=>t.tag);
+    const r = await callGemini(
+      [{text: correctPrompt($("hintText").value, tags) + "\n" + raw}], 0.1);
+    state.trans = r;
     await fillStep2(r);
     setStep(2);
   }catch(err){ msg($("rawInfo"), err.message, true); }
@@ -798,31 +808,158 @@ $("btnCorrect").onclick = async ()=>{
 };
 
 /* ---- 音声ファイルから ---- */
-$("audio").onchange = e=>{
-  const f = e.target.files[0];
-  const btn = $("btnTranscribe");
-  if(!f){ btn.disabled = true; $("audioInfo").textContent=""; return; }
-  const mb = f.size/1024/1024;
-  $("audioInfo").textContent = `${f.name} / ${mb.toFixed(1)} MB`;
-  if(f.size > INLINE_LIMIT){
-    $("audioInfo").innerHTML += `<br><span style="color:var(--danger)">18MBを超えています。章を分けて録音し直してください。</span>`;
+/* base64にすると約1.33倍になるため、リクエスト上限20MBから逆算して余裕を持たせる */
+const MAX_AUDIO = 14 * 1024 * 1024;
+let pendingAudio = null;   // {blob, name}
+
+function setAudio(blob, name){
+  pendingAudio = blob ? {blob, name} : null;
+  const info = $("audioInfo"), btn = $("btnTranscribe");
+  if(!blob){ info.textContent = ""; btn.disabled = true; return; }
+  const mb = blob.size/1024/1024;
+  info.textContent = `${name} ／ ${mb.toFixed(1)} MB`;
+  if(blob.size > MAX_AUDIO){
+    info.innerHTML += `<br><span style="color:var(--danger)">大きすぎます（上限14MB）。章を分けてください。</span>`;
     btn.disabled = true;
   } else btn.disabled = false;
+}
+
+/* ---- アプリ内録音 ---- */
+let rec = null, recChunks = [], recT0 = 0, recElapsed = 0, recTick = null;
+
+function pickMime(){
+  const cands = ["audio/webm;codecs=opus","audio/ogg;codecs=opus","audio/mp4","audio/webm"];
+  for(const m of cands) if(window.MediaRecorder?.isTypeSupported?.(m)) return m;
+  return "";
+}
+const fmtTime = ms =>
+  String(Math.floor(ms/60000)).padStart(2,"0") + ":" + String(Math.floor(ms/1000)%60).padStart(2,"0");
+
+function tick(){
+  const ms = recElapsed + (recT0 ? Date.now()-recT0 : 0);
+  $("recTime").textContent = fmtTime(ms);
+}
+
+$("btnRec").onclick = async ()=>{
+  if(rec && rec.state !== "inactive"){        // 停止
+    rec.stop();
+    return;
+  }
+  if(!navigator.mediaDevices?.getUserMedia){
+    msg($("recInfo"), location.protocol==="https:" || location.hostname==="localhost"
+      ? "このブラウザはマイクに対応していません。録音済みファイルをお使いください。"
+      : "マイクを使うにはhttpsで開く必要があります。Netlifyなどに置くか、localhost経由で開いてください。", true);
+    return;
+  }
+  try{
+    const stream = await navigator.mediaDevices.getUserMedia({audio:{
+      echoCancellation:true, noiseSuppression:true, autoGainControl:true
+    }});
+    const mime = pickMime();
+    rec = new MediaRecorder(stream, mime ? {mimeType:mime} : undefined);
+    recChunks = []; recElapsed = 0; recT0 = Date.now();
+
+    rec.ondataavailable = e => { if(e.data.size) recChunks.push(e.data); };
+    rec.onstop = ()=>{
+      clearInterval(recTick); recTick = null; recT0 = 0;
+      stream.getTracks().forEach(t=>t.stop());
+      const type = rec.mimeType || mime || "audio/webm";
+      const blob = new Blob(recChunks,{type});
+      $("recPlay").src = URL.createObjectURL(blob);
+      $("recPlay").style.display = "";
+      $("btnRec").textContent = "録音をやり直す";
+      $("btnPause").style.display = "none";
+      setAudio(blob, "録音 " + fmtTime(recElapsed));
+    };
+
+    rec.start(1000);
+    recTick = setInterval(tick, 500);
+    $("btnRec").textContent = "録音を止める";
+    $("btnPause").style.display = ""; $("btnPause").textContent = "一時停止";
+    $("recPlay").style.display = "none";
+    $("recInfo").textContent = "録音中です。画面を消さないでください。";
+    setAudio(null);
+  }catch(err){
+    msg($("recInfo"), "マイクを使えませんでした。ブラウザの許可設定を確認してください。（"+err.message+"）", true);
+  }
+};
+
+$("btnPause").onclick = ()=>{
+  if(!rec) return;
+  if(rec.state === "recording"){
+    rec.pause(); recElapsed += Date.now()-recT0; recT0 = 0;
+    $("btnPause").textContent = "再開する";
+  }else if(rec.state === "paused"){
+    rec.resume(); recT0 = Date.now();
+    $("btnPause").textContent = "一時停止";
+  }
+};
+
+/* Geminiが受け取れない形式だったとき用に、16kHzモノラルのWAVへ変換する */
+async function toWav(blob){
+  const AC = window.AudioContext || window.webkitAudioContext;
+  const OC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+  if(!AC || !OC) throw new Error("この形式の音声を変換できませんでした。");
+
+  const buf = await new AC().decodeAudioData(await blob.arrayBuffer());
+  const rate = 16000;
+  const off = new OC(1, Math.ceil(buf.duration*rate), rate);
+  const src = off.createBufferSource();
+  src.buffer = buf; src.connect(off.destination); src.start();
+  const out = await off.startRendering();
+  const d = out.getChannelData(0);
+
+  const ab = new ArrayBuffer(44 + d.length*2), v = new DataView(ab);
+  const w = (o,s)=>{ for(let i=0;i<s.length;i++) v.setUint8(o+i, s.charCodeAt(i)); };
+  w(0,"RIFF"); v.setUint32(4, 36+d.length*2, true); w(8,"WAVE"); w(12,"fmt ");
+  v.setUint32(16,16,true); v.setUint16(20,1,true); v.setUint16(22,1,true);
+  v.setUint32(24,rate,true); v.setUint32(28,rate*2,true);
+  v.setUint16(32,2,true); v.setUint16(34,16,true);
+  w(36,"data"); v.setUint32(40, d.length*2, true);
+  let o = 44;
+  for(let i=0;i<d.length;i++,o+=2){
+    const s = Math.max(-1, Math.min(1, d[i]));
+    v.setInt16(o, s<0 ? s*0x8000 : s*0x7FFF, true);
+  }
+  return new Blob([ab],{type:"audio/wav"});
+}
+
+$("audio").onchange = e=>{
+  const f = e.target.files[0];
+  if(!f){ setAudio(null); return; }
+  $("recPlay").style.display = "none";
+  setAudio(f, f.name);
 };
 
 $("btnTranscribe").dataset.label = "文字起こしを始める";
 $("btnTranscribe").onclick = async ()=>{
-  const f = $("audio").files[0];
-  if(!f) return;
+  if(!pendingAudio) return;
   const btn = $("btnTranscribe");
   busy(btn,true,"聞き取っています");
   try{
-    const b64 = await toBase64(f);
-    const mime = f.type && f.type.startsWith("audio") ? f.type : "audio/mp4";
-    const r = await callGemini(
-      [{inlineData:{mimeType:mime, data:b64}}, {text:TRANSCRIBE_PROMPT}], 0.1
-    );
-    state.trans = r; state.audioName = f.name;
+    const tags = (await getAll("tags")).sort((a,b)=>b.count-a.count).map(t=>t.tag);
+    const prompt = transcribePrompt($("hintText").value, tags);
+
+    const send = async blob => {
+      const mime = (blob.type || "audio/mp4").split(";")[0];
+      return callGemini(
+        [{inlineData:{mimeType:mime, data:await toBase64(blob)}}, {text:prompt}], 0.1);
+    };
+
+    let r;
+    try{
+      r = await send(pendingAudio.blob);
+    }catch(err){
+      // ブラウザの録音形式をGeminiが受け取れない場合、WAVに変換して再試行する
+      if(!/mime|unsupported|not supported|INVALID_ARGUMENT/i.test(err.message)) throw err;
+      $("audioInfo").textContent = "形式を変換して再試行しています…";
+      const wav = await toWav(pendingAudio.blob);
+      if(wav.size > MAX_AUDIO)
+        throw new Error("変換後の音声が大きすぎます（" + (wav.size/1048576).toFixed(1) + "MB）。10分以内に分けて録音してください。");
+      r = await send(wav);
+    }
+
+    state.trans = r;
     await fillStep2(r);
     setStep(2);
   }catch(err){ msg($("audioInfo"), err.message, true); }
@@ -934,7 +1071,7 @@ $("btnSave").onclick = async ()=>{
     await put("chunks",{
       chunk_id:chunkId, book_id:bookId,
       chapter_no:$("fChapNo").value.trim(), chapter_title:$("fChapTitle").value.trim(),
-      recorded_at:todayStr(), audio_file_name:state.audioName,
+      recorded_at:todayStr(),
       body_text:$("fBody").value, my_comment:$("fComment").value,
       short_summary:$("mShort").value, summary:$("mSummary").value,
       key_points:$("mPoints").value.split("\n").filter(Boolean),
@@ -960,11 +1097,12 @@ $("btnSave").onclick = async ()=>{
 };
 
 $("btnNext").onclick = ()=>{
-  state = {trans:null, meta:null, audioName:""};
+  state = {trans:null, meta:null};
   $("rawText").value = ""; $("rawInfo").textContent = "0 字";
   $("btnCorrect").disabled = true;
-  $("audio").value = ""; $("audioInfo").textContent = "";
-  $("btnTranscribe").disabled = true;
+  $("audio").value = ""; setAudio(null);
+  $("recPlay").style.display = "none"; $("recTime").textContent = "00:00";
+  $("btnRec").textContent = "録音を始める"; $("btnPause").style.display = "none";
   setStep(1);
 };
 
