@@ -325,7 +325,7 @@ details[open] summary{margin-bottom:7px}
       <label for="mPoints">要点（1行に1つ）</label>
       <textarea id="mPoints" style="min-height:130px"></textarea>
 
-      <label for="mFlow">前章からの流れ</label>
+      <label for="mFlow">この章までの流れ</label>
       <textarea id="mFlow" style="min-height:100px"></textarea>
       <label for="mShift">私の考えの変化</label>
       <textarea id="mShift" style="min-height:90px"></textarea>
@@ -450,6 +450,23 @@ details[open] summary{margin-bottom:7px}
   </div>
 
   <div class="card">
+    <h2>まとめて作り直す</h2>
+    <p class="lede">要約やタグの作り方を改めたとき、保存済みの章を新しい基準で作り直します。</p>
+
+    <label for="regenScope">対象</label>
+    <select id="regenScope"></select>
+    <div class="hint" id="regenCount"></div>
+
+    <div class="note">本文と所感はそのまま使い、要約・要点・流れ・タグ・Q&amp;A・重要度を作り直します。<strong>手で直した内容は上書きされます。</strong>先にJSONの控えを取ってください。</div>
+
+    <div class="actions">
+      <button class="btn" id="btnBulk">作り直しを始める</button>
+      <button class="btn warn" id="btnBulkStop" style="display:none">中止する</button>
+    </div>
+    <pre id="bulkLog" class="mono" style="white-space:pre-wrap;display:none;background:#fff;border:1px solid var(--line);padding:12px;border-radius:3px;font-size:12px;line-height:1.8;max-height:280px;overflow:auto"></pre>
+  </div>
+
+  <div class="card">
     <h2>控えを取る</h2>
     <p class="lede">ブラウザのデータは消えることがあります。月に一度は書き出してください。</p>
     <div id="stat" class="mono"></div>
@@ -476,7 +493,7 @@ details[open] summary{margin-bottom:7px}
 /* =====================================================================
    定数
 ===================================================================== */
-const PROMPT_VERSION = "v1.0";
+const PROMPT_VERSION = "v1.1";   // 流れの指示を二層構造に変更
 const MODEL = "gemini-2.5-flash";
 
 const CATEGORIES = [
@@ -731,7 +748,10 @@ function cmpChap(a,b){
 function sortChunks(cs){ return [...cs].sort(cmpChap); }
 
 /* 同じ本の既読章を、議論の流れを追える形にまとめる。
-   before を渡すと、その章より前のものだけを対象にする（作り直し用）。 */
+   before を渡すと、その章より前のものだけを対象にする（作り直し用）。
+   直近の章ほど詳しく、古い章は一言要約だけにして、章数が増えても膨らまないようにする。 */
+const RECENT_DETAIL = 3;
+
 async function priorContext(bookId, before){
   if(!bookId) return "";
   let cs = sortChunks((await getAll("chunks")).filter(c=>c.book_id===bookId));
@@ -741,17 +761,21 @@ async function priorContext(bookId, before){
   else if(before)
     cs = cs.filter(c=>c.chunk_id!==before.chunk_id);
   if(!cs.length) return "";
-  return cs.map(c=>
-`■ ${c.chapter_no} ${c.chapter_title}
-　要約: ${c.short_summary}
-　要点: ${(c.key_points||[]).join(" ／ ")}
-　当時の私の所感: ${c.my_comment ? c.my_comment.slice(0,400) : "（記録なし）"}`
-  ).join("\n\n");
+
+  const cut = cs.length - RECENT_DETAIL;
+  return cs.map((c,i)=>{
+    const head = `■ ${c.chapter_no} ${c.chapter_title}`;
+    if(i < cut) return `${head}\n　${c.short_summary}`;
+    return `${head}\n　要約: ${c.summary || c.short_summary}\n`
+         + `　要点: ${(c.key_points||[]).join(" ／ ")}\n`
+         + `　当時の私の所感: ${c.my_comment ? c.my_comment.slice(0,400) : "（記録なし）"}`;
+  }).join("\n\n");
 }
 
 function metaPrompt(body, comment, tags, prior){
   const priorBlock = prior ? `
 【この本で私がすでに読んだ章（章番号順）】
+直近の章ほど詳しく記載しています。古い章は一言要約のみです。
 ${prior}
 ` : `
 【この本で私がすでに読んだ章】
@@ -790,9 +814,13 @@ ${tags.length ? tags.join("、") : "（まだ登録なし）"}
 - importance: 1〜5。繰り返し参照する価値が高いほど大きく
 - category_2: 該当が無ければ空文字。無理に埋めない
 
-- context_flow: 150字程度。既読章の議論を受けて、この章が何を積み上げたかを書く。
-  「前章では〜を示した上で、本章では〜へ進む」のように、論の運びが分かる書き方にする。
-  内容の要約の繰り返しではなく、章と章の接続を説明すること。
+- context_flow: 200〜250字。この章が、本の冒頭からの議論のどこに位置するかを書く。
+  必ず次の2つを順に含めること。
+  (1) 遠景 — これまでの章全体を通して著者が何を積み上げてきたか。1〜2文で俯瞰する
+  (2) 近景 — その到達点を受けて、本章が何を新たに進めたか
+  直前の章だけを見て書かないこと。序盤からの論の運びを踏まえること。
+  章の内容の要約を繰り返すのではなく、章と章のつながりだけを説明する。
+  既読章が1つだけの場合は(2)のみでよい。
   既読章が無い場合は、この本がどこから始まるのかを1文で書く。
 
 - thought_shift: 120字程度。既読章の「当時の私の所感」と今回の所感を読み比べ、
@@ -1133,7 +1161,7 @@ function fillStep3(m, existingTags, prior){
   $("mFlow").value    = m.context_flow||"";
   $("mShift").value   = m.thought_shift||"";
   $("flowHint").textContent = prior
-    ? "この本の既読章を読み比べて書かれています。"
+    ? "この本の既読章すべてを踏まえて書かれています。"
     : "この本の最初の章なので、起点として記録されます。";
 
   const opt = extra => CATEGORIES.map(c=>`<option>${esc(c)}</option>`).join("") + (extra||"");
@@ -1287,12 +1315,12 @@ function renderBook(books, chunks){
 
       <div id="storyBox">
         ${b.storyline ? `
-          <h3 style="font-family:var(--serif);font-size:15px;margin:20px 0 4px">ここまでの流れ</h3>
+          <h3 style="font-family:var(--serif);font-size:15px;margin:20px 0 4px">本全体の流れ</h3>
           <div class="meta mono">${esc(b.storyline_chapters)}章時点 ／ ${esc(b.storyline_at||"")}</div>
           ${stale ? `<div class="note">その後 ${cs.length - Number(b.storyline_chapters)} 章が加わっています。作り直してください。</div>` : ""}
           <p style="white-space:pre-wrap;font-size:14px">${esc(b.storyline)}</p>` : ""}
         <div class="actions">
-          <button class="btn ghost" id="btnStory">${b.storyline ? "流れを作り直す" : "ここまでの流れをまとめる"}</button>
+          <button class="btn ghost" id="btnStory">${b.storyline ? "本全体の流れを作り直す" : "本全体の流れをまとめる"}</button>
         </div>
       </div>
 
@@ -1302,7 +1330,7 @@ function renderBook(books, chunks){
           <div class="meta">${esc(c.chunk_id)} ／ ${esc(c.recorded_at)} ／ 重要度 ${c.importance}</div>
           <div>${[c.category_1,c.category_2].filter(Boolean).map(x=>`<span class="tag cat">${esc(x)}</span>`).join("")}
                ${(c.tags||[]).map(t=>`<span class="tag">${esc(t)}</span>`).join("")}</div>
-          ${c.context_flow ? `<div class="src" style="border-left-color:var(--mustard);background:#FBF6EA"><strong>流れ</strong><br>${esc(c.context_flow)}</div>` : ""}
+          ${c.context_flow ? `<div class="src" style="border-left-color:var(--mustard);background:#FBF6EA"><strong>この章までの流れ</strong><br>${esc(c.context_flow)}</div>` : ""}
           ${c.thought_shift ? `<div class="src"><strong>考えの変化</strong><br>${esc(c.thought_shift)}</div>` : ""}
           <p>${esc(c.summary)}</p>
           <details><summary>要点とQ&amp;A</summary>
@@ -1415,7 +1443,7 @@ function renderEditor(books, cs, book){
       <textarea id="eSummary" style="min-height:150px">${esc(c.summary||"")}</textarea>
       <label for="ePoints">要点（1行に1つ）</label>
       <textarea id="ePoints" style="min-height:120px">${esc((c.key_points||[]).join("\n"))}</textarea>
-      <label for="eFlow">前章からの流れ</label>
+      <label for="eFlow">この章までの流れ</label>
       <textarea id="eFlow" style="min-height:100px">${esc(c.context_flow||"")}</textarea>
       <label for="eShift">私の考えの変化</label>
       <textarea id="eShift" style="min-height:90px">${esc(c.thought_shift||"")}</textarea>
@@ -1706,7 +1734,7 @@ ${book.purpose ? `<p class="meta">読む目的：${esc(book.purpose)}</p>` : ""}
 
 ${overview ? `<h2>本書の概要</h2>${p(overview)}` : ""}
 
-${book.storyline ? `<h2>ここまでの流れ</h2>
+${book.storyline ? `<h2>本全体の流れ</h2>
 <p class="meta">${esc(book.storyline_chapters)}章時点でまとめたもの（${esc(book.storyline_at||"")}）</p>
 ${p(book.storyline)}` : ""}
 
@@ -1714,7 +1742,7 @@ ${p(book.storyline)}` : ""}
 ${cs.map(c=>`
 <h3>${esc(c.chapter_no)}　${esc(c.chapter_title)}</h3>
 <p class="tags">${[c.category_1,c.category_2].filter(Boolean).join(" / ")}${(c.tags||[]).length?"　—　"+esc((c.tags||[]).join("、")):""}</p>
-${c.context_flow?`<p class="flow"><strong>流れ</strong>　${esc(c.context_flow)}</p>`:""}
+${c.context_flow?`<p class="flow"><strong>この章までの流れ</strong>　${esc(c.context_flow)}</p>`:""}
 ${p(c.summary)}
 <ul>${(c.key_points||[]).map(k=>`<li>${esc(k)}</li>`).join("")}</ul>
 ${c.thought_shift?`<p class="flow"><strong>考えの変化</strong>　${esc(c.thought_shift)}</p>`:""}
@@ -1876,6 +1904,119 @@ async function renderAlert(){
   });
 }
 
+/* ---- 保存済みの章をまとめて作り直す ---- */
+const sleep = ms => new Promise(r=>setTimeout(r,ms));
+const CALL_INTERVAL = 7000;   // 無料枠は毎分10回。余裕をみて7秒あける
+let bulkStop = false;
+
+async function pickTargets(){
+  const scope = $("regenScope").value;
+  let cs = await getAll("chunks");
+  if(scope === "old")      cs = cs.filter(c=>c.prompt_version !== PROMPT_VERSION);
+  else if(scope !== "all") cs = cs.filter(c=>c.book_id === scope);
+  // 本ごとに章番号順。前の章の結果を後の章が参照するため、順序が重要
+  return cs.sort((a,b)=>
+    String(a.book_id).localeCompare(String(b.book_id)) || cmpChap(a,b));
+}
+
+async function renderRegenScope(){
+  const books = await getAll("books");
+  const sel = $("regenScope");
+  const keep = sel.value;
+  sel.innerHTML =
+    `<option value="old">古い版で作られた章だけ</option>` +
+    `<option value="all">すべての章</option>` +
+    books.map(b=>`<option value="${esc(b.book_id)}">『${esc(b.title)}』のみ</option>`).join("");
+  if(keep) sel.value = keep;
+  sel.onchange = updateRegenCount;
+  await updateRegenCount();
+}
+
+async function updateRegenCount(){
+  const n = (await pickTargets()).length;
+  const mins = Math.ceil(n * CALL_INTERVAL / 60000);
+  $("regenCount").textContent = n
+    ? `${n}章が対象です。1章ずつ順に処理するので、およそ${mins}分かかります。`
+    : "対象の章はありません。";
+  $("btnBulk").disabled = !n;
+}
+
+$("btnBulkStop").onclick = ()=>{ bulkStop = true; };
+
+$("btnBulk").dataset.label = "作り直しを始める";
+$("btnBulk").onclick = async ()=>{
+  const targets = await pickTargets();
+  if(!targets.length) return;
+  if(!confirm(`${targets.length}章を作り直します。手で直した要約やタグは上書きされます。続けますか。`)) return;
+
+  const log = $("bulkLog"), lines = [];
+  const say = t => { lines.push(t); log.textContent = lines.join("\n"); log.scrollTop = log.scrollHeight; };
+  log.style.display = "";
+  bulkStop = false;
+  $("btnBulkStop").style.display = "";
+  busy($("btnBulk"), true, "作り直しています");
+
+  const books = await getAll("books");
+  const titleOf = id => (books.find(b=>b.book_id===id)||{}).title || "";
+  let done = 0, failed = 0;
+  const touched = new Set();
+
+  try{
+    for(const [i,c] of targets.entries()){
+      if(bulkStop){ say("— 中止しました —"); break; }
+      const label = `[${i+1}/${targets.length}] 『${titleOf(c.book_id)}』${c.chapter_no} ${c.chapter_title}`;
+
+      try{
+        const tags = (await getAll("tags")).sort((a,b)=>b.count-a.count).map(t=>t.tag);
+        const prior = await priorContext(c.book_id, c);
+
+        let m;
+        try{
+          m = await callGemini([{text: metaPrompt(c.body_text, c.my_comment||"", tags, prior)}], 0.3);
+        }catch(err){
+          if(!/上限|429/.test(err.message)) throw err;
+          say(`${label} … 上限に達したため60秒待ちます`);
+          await sleep(60000);
+          m = await callGemini([{text: metaPrompt(c.body_text, c.my_comment||"", tags, prior)}], 0.3);
+        }
+
+        await put("chunks",{...c,
+          short_summary: m.short_summary || c.short_summary,
+          summary:       m.summary       || c.summary,
+          key_points:    m.key_points    || c.key_points,
+          context_flow:  m.context_flow  ?? c.context_flow,
+          thought_shift: m.thought_shift ?? c.thought_shift,
+          category_1: CATEGORIES.includes(m.category_1) ? m.category_1 : c.category_1,
+          category_2: CATEGORIES.includes(m.category_2) ? m.category_2 : "",
+          tags: (m.tags||[]).length ? m.tags : c.tags,
+          qa: (m.qa||[]).length ? m.qa : c.qa,
+          importance: Number(m.importance) || c.importance,
+          prompt_version: PROMPT_VERSION, updated_at: nowStr()
+        });
+        await rebuildTags();          // 次の章に最新のタグ一覧を渡すため毎回更新する
+        touched.add(c.book_id);
+        done++;
+        say(`${label} … 完了`);
+      }catch(err){
+        failed++;
+        say(`${label} … 失敗（${err.message.slice(0,80)}）`);
+      }
+
+      if(i < targets.length-1 && !bulkStop) await sleep(CALL_INTERVAL);
+    }
+
+    say("");
+    say(`作り直し ${done}章 ／ 失敗 ${failed}章`);
+    if(touched.size)
+      say("この本の「本全体の流れ」も古くなりました。書架から作り直してください。");
+  }finally{
+    $("btnBulkStop").style.display = "none";
+    busy($("btnBulk"), false);
+    await renderStat();
+    await updateRegenCount();
+  }
+};
+
 async function renderStat(){
   const [books, chunks, tags] = await Promise.all([getAll("books"),getAll("chunks"),getAll("tags")]);
   const chars = chunks.reduce((s,c)=>s+(c.char_count||0),0);
@@ -1883,6 +2024,7 @@ async function renderStat(){
   $("stat").innerHTML = `${books.length}冊 ／ ${chunks.length}章 ／ ${tags.length}タグ ／ ${chars.toLocaleString()}字<br>`
     + `最後に書き出した日 : ${last ? new Date(last).toLocaleDateString("sv-SE") : "まだありません"}`;
   await renderPersist();
+  await renderRegenScope();
   $("apiKey").value = await getSetting("apiKey");
 }
 
