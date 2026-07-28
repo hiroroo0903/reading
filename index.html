@@ -199,22 +199,42 @@ details[open] summary{margin-bottom:7px}
   <!-- STEP 1 -->
   <div id="s1">
     <div class="card">
-      <h2>音声を読み込む</h2>
-      <p class="lede">章ごとに録音したファイルを選びます。</p>
-      <input type="file" id="audio" accept="audio/*">
-      <div id="audioInfo" class="hint"></div>
-      <div class="actions">
-        <button class="btn" id="btnTranscribe" disabled>文字起こしを始める</button>
+      <h2>音読した内容を入れる</h2>
+      <p class="lede">読み上げた文字を直接入れるか、録音ファイルから起こします。</p>
+
+      <div id="modeSw" style="margin-bottom:14px">
+        <button class="tag sel" data-m="text">文字で入れる</button>
+        <button class="tag" data-m="audio">音声ファイルから</button>
+      </div>
+
+      <div id="mText">
+        <label for="rawText">音読したテキスト</label>
+        <textarea id="rawText" style="min-height:260px"
+          placeholder="キーボードのマイクを押して読み上げてください。書き起こし済みのテキストを貼り付けても構いません。"></textarea>
+        <div class="hint" id="rawInfo">0 字</div>
+        <div class="actions">
+          <button class="btn" id="btnCorrect" disabled>文字を整える</button>
+        </div>
+      </div>
+
+      <div id="mAudio" style="display:none">
+        <input type="file" id="audio" accept="audio/*">
+        <div id="audioInfo" class="hint"></div>
+        <div class="actions">
+          <button class="btn" id="btnTranscribe" disabled>文字起こしを始める</button>
+        </div>
       </div>
     </div>
+
     <details class="card">
-      <summary>録音のしかた</summary>
+      <summary>読み上げかた</summary>
       <ol style="font-size:13px;padding-left:20px;margin:8px 0 0">
         <li>冒頭に「書名『◯◯』、著者△△、第1章『□□』」と言う</li>
         <li>本文を読み上げる</li>
         <li><strong>「ここから所感」</strong>と言う</li>
         <li>自分の考えを話す</li>
       </ol>
+      <p class="hint">誤変換はこの時点で直さなくて構いません。次の画面でまとめて整えます。</p>
     </details>
   </div>
 
@@ -591,6 +611,47 @@ async function priorContext(bookId){
   ).join("\n\n");
 }
 
+const CORRECT_PROMPT = `
+あなたは読書記録の編集者です。
+以下は、ある人物が書籍を章単位で音読し、続けて自分の所感を述べた内容を、
+音声入力でそのまま文字にしたものです。変換ミスや言い直しが多く含まれています。
+
+【入力の構造】
+1. 冒頭で書名・著者・章番号・章タイトルを述べている
+2. 続いて本文を読み上げている
+3. 「ここから所感」などの区切りの言葉がある
+4. その後は本人のコメント・感想
+
+【あなたの仕事】
+1. 音声入力による誤変換を、文脈から正しい表記に直す
+   （例: 機械/機会、進化/深化、意思/意志、保証/保障、以外/意外、聞く/効く/訊く）
+2. 専門用語・カタカナ語・人名・書名を正しい表記に直す
+3. 句読点が欠けている箇所に適切に補う
+4. 「えー」「あの」「えっと」などのフィラー、明らかな言い直しや重複を削除する
+5. 音声入力特有の助詞の欠落・崩れた語尾を、自然な書き言葉に整える
+6. 意味は絶対に変えない。要約も脚色も加筆もしない
+7. 読みやすいよう、意味のまとまりごとに改行を入れ、段落を分ける
+8. 冒頭部分から書誌情報を抽出する
+9. 区切りの言葉の前後で本文と所感を分離する（区切りが無ければ my_comment は空文字）
+10. 宣言部分そのもの（「書名○○、第3章」等）は body_text に含めない
+
+【重要】判断に迷った箇所は勝手に決めつけず、confidence_note に列挙すること。
+書き手が後で確認できるようにするのが目的です。
+
+【出力形式】以下のJSONのみを出力する。説明文やコードブロック記号は付けない。
+{
+  "title":"書名",
+  "author":"著者名（不明なら空文字）",
+  "chapter_no":"第3章 のような章番号",
+  "chapter_title":"章タイトル（不明なら空文字）",
+  "body_text":"整形済みの本文。改行で段落分けする",
+  "my_comment":"所感パート。無ければ空文字",
+  "confidence_note":"直すか迷った箇所や、判断が割れそうな語を簡潔に列挙。無ければ空文字"
+}
+
+===== 音声入力されたテキスト =====
+`.trim();
+
 function metaPrompt(body, comment, tags, prior){
   const priorBlock = prior ? `
 【この本で私がすでに読んだ章（章番号順）】
@@ -690,6 +751,37 @@ function busy(btn,on,label){
 ===================================================================== */
 let state = { trans:null, meta:null, audioName:"" };
 
+/* ---- 入力モードの切り替え ---- */
+$("modeSw").querySelectorAll("button").forEach(b=>{
+  b.onclick = ()=>{
+    $("modeSw").querySelectorAll("button").forEach(x=>x.classList.toggle("sel", x===b));
+    $("mText").style.display  = b.dataset.m==="text"  ? "" : "none";
+    $("mAudio").style.display = b.dataset.m==="audio" ? "" : "none";
+  };
+});
+
+/* ---- 文字で入れる ---- */
+$("rawText").oninput = ()=>{
+  const n = $("rawText").value.trim().length;
+  $("rawInfo").textContent = `${n.toLocaleString()} 字`;
+  $("btnCorrect").disabled = n < 20;
+};
+
+$("btnCorrect").dataset.label = "文字を整える";
+$("btnCorrect").onclick = async ()=>{
+  const raw = $("rawText").value.trim();
+  const btn = $("btnCorrect");
+  busy(btn,true,"整えています");
+  try{
+    const r = await callGemini([{text: CORRECT_PROMPT + "\n" + raw}], 0.1);
+    state.trans = r; state.audioName = "（音声入力）";
+    await fillStep2(r);
+    setStep(2);
+  }catch(err){ msg($("rawInfo"), err.message, true); }
+  finally{ busy(btn,false); }
+};
+
+/* ---- 音声ファイルから ---- */
 $("audio").onchange = e=>{
   const f = e.target.files[0];
   const btn = $("btnTranscribe");
@@ -853,6 +945,8 @@ $("btnSave").onclick = async ()=>{
 
 $("btnNext").onclick = ()=>{
   state = {trans:null, meta:null, audioName:""};
+  $("rawText").value = ""; $("rawInfo").textContent = "0 字";
+  $("btnCorrect").disabled = true;
   $("audio").value = ""; $("audioInfo").textContent = "";
   $("btnTranscribe").disabled = true;
   setStep(1);
