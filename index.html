@@ -169,6 +169,15 @@ details[open] summary{margin-bottom:7px}
 
 .qa-item{border-top:1px dashed var(--line);padding:10px 0}
 .qa-item:first-of-type{border-top:0}
+
+#alertBar:empty{display:none}
+.alarm{
+  background:#FBF6EA;border:1px solid var(--mustard);border-left-width:5px;
+  border-radius:0 3px 3px 0;padding:13px 15px;margin-bottom:16px;font-size:13px;line-height:1.7;
+}
+.alarm.hot{background:#FAEEED;border-color:var(--danger)}
+.alarm strong{display:block;margin-bottom:3px}
+.alarm button{margin-top:9px}
 </style>
 </head>
 <body>
@@ -187,6 +196,8 @@ details[open] summary{margin-bottom:7px}
 </header>
 
 <main>
+
+<div id="alertBar"></div>
 
 <!-- =============== 取り込み =============== -->
 <section class="panel on" id="p-ingest">
@@ -408,6 +419,25 @@ details[open] summary{margin-bottom:7px}
     </div>
     <div id="keyMsg"></div>
     <pre id="diagOut" class="mono" style="white-space:pre-wrap;display:none;background:#fff;border:1px solid var(--line);padding:12px;border-radius:3px;font-size:12px;line-height:1.7"></pre>
+  </div>
+
+  <div class="card">
+    <h2>保存の状態</h2>
+    <p class="lede">ブラウザにデータを消さないよう申請しています。</p>
+    <div id="persistBox" class="mono"></div>
+    <div class="actions">
+      <button class="btn ghost" id="btnPersist">保存の保護を申請する</button>
+    </div>
+    <details style="margin-top:14px">
+      <summary style="font-size:13px;color:var(--ink);cursor:pointer">iPhoneで保護を確実にする手順</summary>
+      <ol style="font-size:13px;padding-left:20px;margin:9px 0 0">
+        <li>Safariでこのページを開く</li>
+        <li>下部の共有ボタンをタップ</li>
+        <li>「ホーム画面に追加」を選ぶ</li>
+        <li>追加されたアイコンから起動し、この画面で保護を申請する</li>
+      </ol>
+      <p class="hint">ホーム画面のアプリはSafari本体と別扱いになり、7日間ルールの対象から外れます。ただしアプリを削除するとデータも消えます。</p>
+    </details>
   </div>
 
   <div class="card">
@@ -1091,6 +1121,7 @@ $("btnSave").onclick = async ()=>{
     }
 
     $("savedMsg").textContent = `${chunkId}として収めました。控えは設定タブから書き出せます。`;
+    await renderAlert();
     setStep(4);
   }catch(err){ alert(err.message); }
   finally{ busy(btn,false); }
@@ -1676,10 +1707,80 @@ $("btnDiag").onclick = async ()=>{
   busy(btn,false);
 };
 
+/* ---- データを消させないための保護 ---- */
+let persistState = {supported:false, persisted:false};
+
+async function requestPersist(force){
+  if(!navigator.storage?.persist){ persistState = {supported:false, persisted:false}; return persistState; }
+  let persisted = await navigator.storage.persisted();
+  if(!persisted || force) persisted = await navigator.storage.persist();
+  let est = {};
+  try{ est = await navigator.storage.estimate(); }catch(e){}
+  persistState = {supported:true, persisted, usage:est.usage, quota:est.quota};
+  return persistState;
+}
+
+async function renderPersist(){
+  const p = persistState, mb = n => n ? (n/1048576).toFixed(1)+" MB" : "—";
+  $("persistBox").innerHTML = !p.supported
+    ? `保護の申請 : このブラウザは対応していません<br>控えの書き出しを必ず定期的に行ってください`
+    : `保護の状態 : ${p.persisted ? "保護されています" : "保護されていません"}<br>` +
+      `使用量     : ${mb(p.usage)} ／ 上限 ${mb(p.quota)}`;
+}
+
+$("btnPersist").onclick = async ()=>{
+  await requestPersist(true);
+  await renderPersist();
+  await renderAlert();
+  if(!persistState.persisted)
+    msg($("keyMsg"), "ブラウザが保護を許可しませんでした。ホーム画面に追加してから、もう一度お試しください。", true);
+};
+
+/* ---- 控えが古くなっていないか見張る ---- */
+const EXPORT_WARN_DAYS = 21;
+
+async function renderAlert(){
+  const bar = $("alertBar");
+  const chunks = await getAll("chunks");
+  if(!chunks.length){ bar.innerHTML = ""; return; }
+
+  const last = await getSetting("last_export","");
+  const days = last ? Math.floor((Date.now()-new Date(last).getTime())/86400000) : null;
+  const parts = [];
+
+  if(persistState.supported && !persistState.persisted){
+    parts.push(`<div class="alarm">
+      <strong>データが消える可能性があります</strong>
+      しばらく使わないと、ブラウザがこの記録を削除することがあります。
+      設定タブで保護を申請するか、ホーム画面に追加してください。
+      <button class="btn ghost mini" data-go="settings">設定を開く</button>
+    </div>`);
+  }
+
+  if(days === null || days >= EXPORT_WARN_DAYS){
+    parts.push(`<div class="alarm${days===null||days>=60?" hot":""}">
+      <strong>${days===null ? "まだ控えを取っていません" : `控えを取ってから${days}日経っています`}</strong>
+      ${chunks.length}章分の記録があります。JSONに書き出しておけば、端末を替えても失われません。
+      <button class="btn ghost mini" data-go="export">いま書き出す</button>
+    </div>`);
+  }
+
+  bar.innerHTML = parts.join("");
+  bar.querySelectorAll("[data-go]").forEach(b=>{
+    b.onclick = ()=>{
+      document.querySelector('#nav button[data-p="settings"]').click();
+      if(b.dataset.go === "export") $("btnExport").click();
+    };
+  });
+}
+
 async function renderStat(){
   const [books, chunks, tags] = await Promise.all([getAll("books"),getAll("chunks"),getAll("tags")]);
   const chars = chunks.reduce((s,c)=>s+(c.char_count||0),0);
-  $("stat").textContent = `${books.length}冊 ／ ${chunks.length}章 ／ ${tags.length}タグ ／ ${chars.toLocaleString()}字`;
+  const last = await getSetting("last_export","");
+  $("stat").innerHTML = `${books.length}冊 ／ ${chunks.length}章 ／ ${tags.length}タグ ／ ${chars.toLocaleString()}字<br>`
+    + `最後に書き出した日 : ${last ? new Date(last).toLocaleDateString("sv-SE") : "まだありません"}`;
+  await renderPersist();
   $("apiKey").value = await getSetting("apiKey");
 }
 
@@ -1689,6 +1790,9 @@ $("btnExport").onclick = async ()=>{
     books: await getAll("books"), chunks: await getAll("chunks"), tags: await getAll("tags")
   };
   download(`音読書架_${todayStr()}.json`, JSON.stringify(data,null,2), "application/json");
+  await setSetting("last_export", new Date().toISOString());
+  await renderStat();
+  await renderAlert();
 };
 
 $("btnImportPick").onclick = ()=> $("importFile").click();
@@ -1702,7 +1806,8 @@ $("importFile").onchange = async e=>{
     for(const c of data.chunks) await put("chunks",c);
     for(const t of (data.tags||[])) await put("tags",t);
     alert("読み込みました。");
-    renderStat();
+    await renderStat();
+    await renderAlert();
   }catch(err){ alert(err.message); }
   finally{ e.target.value = ""; }
 };
@@ -1722,7 +1827,9 @@ $("btnWipe").onclick = async ()=>{
 (async ()=>{
   try{
     await openDB();
+    await requestPersist(false);
     await renderStat();
+    await renderAlert();
 
     if(location.protocol === "file:"){
       document.querySelector('#nav button[data-p="settings"]').click();
