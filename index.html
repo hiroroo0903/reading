@@ -230,13 +230,17 @@ details[open] summary{margin-bottom:7px}
 
       <div id="mAudio">
         <div id="recBox" style="background:#fff;border:1px solid var(--line);border-radius:3px;padding:16px">
-          <div style="display:flex;align-items:center;gap:14px">
-            <button class="btn" id="btnRec" style="flex:0 0 auto">録音を始める</button>
-            <span class="mono" id="recTime" style="font-size:19px;letter-spacing:.06em">00:00</span>
-            <button class="btn ghost mini" id="btnPause" style="display:none;margin:0">一時停止</button>
+          <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+            <span class="mono" id="recTime" style="font-size:24px;letter-spacing:.06em">00:00</span>
+            <span class="mono" id="recSegs"></span>
           </div>
-          <audio id="recPlay" controls style="display:none;width:100%;margin-top:12px"></audio>
-          <div class="hint" id="recInfo">録音中は画面を消さないでください。iPhoneでは画面を消すと録音が止まります。</div>
+          <div style="display:flex;gap:9px;flex-wrap:wrap;margin-top:12px">
+            <button class="btn" id="btnRec">録音を始める</button>
+            <button class="btn ghost" id="btnRecEnd" style="display:none">録音を終える</button>
+            <button class="btn warn" id="btnRecDrop" style="display:none">破棄する</button>
+          </div>
+          <div id="recPlayers" style="margin-top:12px"></div>
+          <div class="hint" id="recInfo">途中で別のアプリに移っても、録音した分は端末に保存されます。戻ってから続きを録れます。</div>
         </div>
 
         <details style="margin-top:12px">
@@ -514,7 +518,7 @@ const CATEGORY_GUIDE = `
 /* =====================================================================
    IndexedDB
 ===================================================================== */
-const DB_NAME = "ondoku-shoka", DB_VER = 1;
+const DB_NAME = "ondoku-shoka", DB_VER = 2;
 let db;
 
 function openDB(){
@@ -532,6 +536,9 @@ function openDB(){
         d.createObjectStore("tags",{keyPath:"tag"});
       if(!d.objectStoreNames.contains("settings"))
         d.createObjectStore("settings",{keyPath:"key"});
+      // 録音の断片。アプリを離れても失わないよう、録音中に随時書き込む
+      if(!d.objectStoreNames.contains("recsegs"))
+        d.createObjectStore("recsegs",{keyPath:"key"});
     };
     rq.onsuccess = e=>{ db = e.target.result; ok(db); };
     rq.onerror  = ()=> ng(new Error("この端末のブラウザはデータ保存を許可していません。プライベートブラウズを解除してください。"));
@@ -909,9 +916,8 @@ function resetIngest(keepBook){
   if(!keepBook) $("hintText").value = "";
   $("rawText").value = ""; $("rawInfo").textContent = "0 字";
   $("btnCorrect").disabled = true;
-  $("audio").value = ""; setAudio(null);
-  $("recPlay").style.display = "none"; $("recTime").textContent = "00:00";
-  $("btnRec").textContent = "録音を始める"; $("btnPause").style.display = "none";
+  $("audio").value = "";
+  clearRecSession();          // 収蔵時に消えているが、取りこぼしがあれば片づける
   renderIngestBooks();
   setStep(1);
 }
@@ -951,102 +957,199 @@ $("btnCorrect").onclick = async ()=>{
 /* ---- 音声ファイルから ---- */
 /* base64にすると約1.33倍になるため、リクエスト上限20MBから逆算して余裕を持たせる */
 const MAX_AUDIO = 14 * 1024 * 1024;
-let pendingAudio = null;   // {blob, name}
+let pendingAudio = null;   // {blobs:[Blob], name, size}
 
-function setAudio(blob, name){
-  pendingAudio = blob ? {blob, name} : null;
+function setAudio(blobs, name){
+  const list = blobs ? (Array.isArray(blobs) ? blobs : [blobs]) : null;
   const info = $("audioInfo"), btn = $("btnTranscribe");
-  if(!blob){ info.textContent = ""; btn.disabled = true; return; }
-  const mb = blob.size/1024/1024;
-  info.textContent = `${name} ／ ${mb.toFixed(1)} MB`;
-  if(blob.size > MAX_AUDIO){
+  if(!list || !list.length){
+    pendingAudio = null; info.textContent = ""; btn.disabled = true; return;
+  }
+  const size = list.reduce((s,b)=>s+b.size, 0);
+  pendingAudio = {blobs:list, name, size};
+  info.textContent = `${name} ／ ${(size/1048576).toFixed(1)} MB`
+    + (list.length>1 ? `（${list.length}区切り）` : "");
+  if(size > MAX_AUDIO){
     info.innerHTML += `<br><span style="color:var(--danger)">大きすぎます（上限14MB）。章を分けてください。</span>`;
     btn.disabled = true;
   } else btn.disabled = false;
 }
 
-/* ---- アプリ内録音 ---- */
-let rec = null, recChunks = [], recT0 = 0, recElapsed = 0, recTick = null;
+/* =====================================================================
+   録音（中断しても続きから録れる）
+
+   ・録音中の音声は1秒ごとにIndexedDBへ書き出す。メモリに溜め込まない
+   ・別のアプリに移るなど画面を離れたら、その場で区切って確定させる
+   ・戻ってきたら新しい区切りとして録音を足す
+   ・文字起こしのときは、区切りを順番どおりにGeminiへ渡す
+     （録音形式は途中結合すると壊れるため、連結せず分けたまま送る）
+===================================================================== */
+let rec = null, recStream = null;
+let recMeta = null;              // {segs, elapsed, mime}
+let recT0 = 0, recTicker = null, recSegIdx = 0, recChunkIdx = 0;
+
+const pad = (n,w)=> String(n).padStart(w,"0");
+const fmtTime = ms =>
+  pad(Math.floor(ms/60000),2) + ":" + pad(Math.floor(ms/1000)%60,2);
 
 function pickMime(){
   const cands = ["audio/webm;codecs=opus","audio/ogg;codecs=opus","audio/mp4","audio/webm"];
   for(const m of cands) if(window.MediaRecorder?.isTypeSupported?.(m)) return m;
   return "";
 }
-const fmtTime = ms =>
-  String(Math.floor(ms/60000)).padStart(2,"0") + ":" + String(Math.floor(ms/1000)%60).padStart(2,"0");
 
-function tick(){
-  const ms = recElapsed + (recT0 ? Date.now()-recT0 : 0);
-  $("recTime").textContent = fmtTime(ms);
+async function loadRecSession(){
+  recMeta = await getSetting("rec_session", null);
+  await renderRec();
+}
+const saveRecMeta = ()=> setSetting("rec_session", recMeta);
+
+async function clearRecSession(){
+  await clearS("recsegs");
+  recMeta = null;
+  await setSetting("rec_session", null);
+  setAudio(null);
+  await renderRec();
 }
 
-$("btnRec").onclick = async ()=>{
-  if(rec && rec.state !== "inactive"){        // 停止
-    rec.stop();
-    return;
+/* 保存済みの断片を、区切りごとの音声にまとめ直す */
+async function assembleSegments(){
+  const rows = await getAll("recsegs");
+  if(!rows.length) return [];
+  rows.sort((a,b)=> a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
+  const bySeg = new Map();
+  for(const r of rows){
+    if(!bySeg.has(r.seg)) bySeg.set(r.seg, []);
+    bySeg.get(r.seg).push(r.blob);
   }
+  const type = (recMeta && recMeta.mime) || "audio/webm";
+  return [...bySeg.keys()].sort((a,b)=>a-b)
+    .map(k => new Blob(bySeg.get(k), {type}));
+}
+
+const isRecording = ()=> rec && rec.state !== "inactive";
+
+function tick(){
+  const base = recMeta ? recMeta.elapsed : 0;
+  $("recTime").textContent = fmtTime(base + (recT0 ? Date.now()-recT0 : 0));
+}
+
+async function renderRec(){
+  const has = recMeta && recMeta.segs > 0;
+  $("recTime").textContent = fmtTime(recMeta ? recMeta.elapsed : 0);
+  $("recSegs").textContent = has ? `${recMeta.segs}区切り 保存済み` : "";
+
+  $("btnRec").textContent = isRecording() ? "録音を止める"
+                          : has ? "続きを録る" : "録音を始める";
+  $("btnRecEnd").style.display  = (has && !isRecording()) ? "" : "none";
+  $("btnRecDrop").style.display = (has && !isRecording()) ? "" : "none";
+
+  const box = $("recPlayers");
+  if(!has || isRecording()){ box.innerHTML = ""; return; }
+  const segs = await assembleSegments();
+  box.innerHTML = segs.map((b,i)=>
+    `<div class="mono" style="margin-top:8px">区切り${i+1} ／ ${(b.size/1048576).toFixed(1)} MB</div>
+     <audio controls src="${URL.createObjectURL(b)}" style="width:100%"></audio>`).join("");
+}
+
+async function startSegment(){
   if(!navigator.mediaDevices?.getUserMedia){
-    msg($("recInfo"), location.protocol==="https:" || location.hostname==="localhost"
+    msg($("recInfo"), (location.protocol==="https:" || location.hostname==="localhost")
       ? "このブラウザはマイクに対応していません。録音済みファイルをお使いください。"
       : "マイクを使うにはhttpsで開く必要があります。Netlifyなどに置くか、localhost経由で開いてください。", true);
     return;
   }
   try{
-    const stream = await navigator.mediaDevices.getUserMedia({audio:{
+    recStream = await navigator.mediaDevices.getUserMedia({audio:{
       echoCancellation:true, noiseSuppression:true, autoGainControl:true
     }});
-    const mime = pickMime();
-    rec = new MediaRecorder(stream, mime ? {mimeType:mime} : undefined);
-    recChunks = []; recElapsed = 0; recT0 = Date.now();
-
-    rec.ondataavailable = e => { if(e.data.size) recChunks.push(e.data); };
-    rec.onstop = ()=>{
-      clearInterval(recTick); recTick = null; recT0 = 0;
-      stream.getTracks().forEach(t=>t.stop());
-      const type = rec.mimeType || mime || "audio/webm";
-      const blob = new Blob(recChunks,{type});
-      $("recPlay").src = URL.createObjectURL(blob);
-      $("recPlay").style.display = "";
-      $("btnRec").textContent = "録音をやり直す";
-      $("btnPause").style.display = "none";
-      setAudio(blob, "録音 " + fmtTime(recElapsed));
-    };
-
-    rec.start(1000);
-    recTick = setInterval(tick, 500);
-    $("btnRec").textContent = "録音を止める";
-    $("btnPause").style.display = ""; $("btnPause").textContent = "一時停止";
-    $("recPlay").style.display = "none";
-    $("recInfo").textContent = "録音中です。画面を消さないでください。";
-    setAudio(null);
   }catch(err){
     msg($("recInfo"), "マイクを使えませんでした。ブラウザの許可設定を確認してください。（"+err.message+"）", true);
+    return;
   }
+
+  const mime = pickMime();
+  if(!recMeta) recMeta = {segs:0, elapsed:0, mime: mime || "audio/webm"};
+  recSegIdx = recMeta.segs;
+  recChunkIdx = 0;
+
+  rec = new MediaRecorder(recStream, mime ? {mimeType:mime} : undefined);
+
+  // 断片が届くたびに即座に保存する。ここが中断対策の要
+  rec.ondataavailable = async e => {
+    if(!e.data.size) return;
+    try{
+      await put("recsegs", {
+        key: `s${pad(recSegIdx,3)}c${pad(recChunkIdx++,6)}`,
+        seg: recSegIdx, blob: e.data
+      });
+    }catch(err){ console.error("録音の保存に失敗", err); }
+  };
+
+  rec.onstop = async ()=>{
+    clearInterval(recTicker); recTicker = null;
+    if(recT0){ recMeta.elapsed += Date.now()-recT0; recT0 = 0; }
+    recStream?.getTracks().forEach(t=>t.stop());
+    recStream = null;
+    recMeta.segs = recSegIdx + 1;
+    await saveRecMeta();
+    const segs = await assembleSegments();
+    setAudio(segs, "録音 " + fmtTime(recMeta.elapsed));
+    await renderRec();
+  };
+
+  rec.start(1000);
+  recT0 = Date.now();
+  recTicker = setInterval(tick, 500);
+  $("recInfo").textContent = "録音中です。別のアプリに移ると、そこで区切って保存します。";
+  await renderRec();
+}
+
+$("btnRec").onclick = async ()=>{
+  if(isRecording()) rec.stop();
+  else await startSegment();
 };
 
-$("btnPause").onclick = ()=>{
-  if(!rec) return;
-  if(rec.state === "recording"){
-    rec.pause(); recElapsed += Date.now()-recT0; recT0 = 0;
-    $("btnPause").textContent = "再開する";
-  }else if(rec.state === "paused"){
-    rec.resume(); recT0 = Date.now();
-    $("btnPause").textContent = "一時停止";
-  }
+$("btnRecEnd").onclick = async ()=>{
+  const segs = await assembleSegments();
+  if(!segs.length) return;
+  setAudio(segs, "録音 " + fmtTime(recMeta.elapsed));
+  $("recInfo").textContent = "この録音を使います。文字起こしに進んでください。";
 };
 
-/* Geminiが受け取れない形式だったとき用に、16kHzモノラルのWAVへ変換する */
-async function toWav(blob){
+$("btnRecDrop").onclick = async ()=>{
+  if(!confirm("録音した内容を破棄します。取り消せません。")) return;
+  await clearRecSession();
+  $("recInfo").textContent = "破棄しました。";
+};
+
+/* 画面を離れたら、その場で区切って確定させる。
+   iOSはバックグラウンドでマイクを止めるため、待たずに保存するのが安全 */
+document.addEventListener("visibilitychange", ()=>{
+  if(document.hidden && isRecording()) rec.stop();
+});
+window.addEventListener("pagehide", ()=>{ if(isRecording()) rec.stop(); });
+
+/* Geminiが受け取れない形式だったとき用に、16kHzモノラルのWAVへ変換する。
+   区切りが複数ある場合は、復号したうえで1本につなげる */
+async function toWav(blobs){
   const AC = window.AudioContext || window.webkitAudioContext;
   const OC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
   if(!AC || !OC) throw new Error("この形式の音声を変換できませんでした。");
 
-  const buf = await new AC().decodeAudioData(await blob.arrayBuffer());
+  const ac = new AC();
+  const bufs = [];
+  for(const b of blobs) bufs.push(await ac.decodeAudioData(await b.arrayBuffer()));
+
   const rate = 16000;
-  const off = new OC(1, Math.ceil(buf.duration*rate), rate);
-  const src = off.createBufferSource();
-  src.buffer = buf; src.connect(off.destination); src.start();
+  const total = bufs.reduce((s,b)=>s+b.duration, 0);
+  const off = new OC(1, Math.ceil(total*rate), rate);
+  let at = 0;
+  for(const b of bufs){
+    const src = off.createBufferSource();
+    src.buffer = b; src.connect(off.destination); src.start(at);
+    at += b.duration;
+  }
   const out = await off.startRendering();
   const d = out.getChannelData(0);
 
@@ -1068,8 +1171,7 @@ async function toWav(blob){
 $("audio").onchange = e=>{
   const f = e.target.files[0];
   if(!f){ setAudio(null); return; }
-  $("recPlay").style.display = "none";
-  setAudio(f, f.name);
+  setAudio([f], f.name);
 };
 
 $("btnTranscribe").dataset.label = "文字起こしを始める";
@@ -1079,25 +1181,37 @@ $("btnTranscribe").onclick = async ()=>{
   busy(btn,true,"聞き取っています");
   try{
     const tags = (await getAll("tags")).sort((a,b)=>b.count-a.count).map(t=>t.tag);
-    const prompt = transcribePrompt($("hintText").value, tags);
+    const multi = pendingAudio.blobs.length > 1;
+    const note = multi
+      ? `\n\n【注意】この音声は同じ章の録音を${pendingAudio.blobs.length}つに区切ったものです。`
+        + `与えられた順に連続した1つの録音として扱ってください。`
+        + `区切り目で言葉が途切れている場合は、前後をつないで自然な文にしてください。`
+      : "";
+    const prompt = transcribePrompt($("hintText").value, tags) + note;
 
-    const send = async blob => {
-      const mime = (blob.type || "audio/mp4").split(";")[0];
-      return callGemini(
-        [{inlineData:{mimeType:mime, data:await toBase64(blob)}}, {text:prompt}], 0.1);
+    const send = async blobs => {
+      const parts = [];
+      for(const b of blobs){
+        parts.push({inlineData:{
+          mimeType:(b.type||"audio/mp4").split(";")[0],
+          data: await toBase64(b)
+        }});
+      }
+      parts.push({text:prompt});
+      return callGemini(parts, 0.1);
     };
 
     let r;
     try{
-      r = await send(pendingAudio.blob);
+      r = await send(pendingAudio.blobs);
     }catch(err){
       // ブラウザの録音形式をGeminiが受け取れない場合、WAVに変換して再試行する
       if(!/mime|unsupported|not supported|INVALID_ARGUMENT/i.test(err.message)) throw err;
       $("audioInfo").textContent = "形式を変換して再試行しています…";
-      const wav = await toWav(pendingAudio.blob);
+      const wav = await toWav(pendingAudio.blobs);
       if(wav.size > MAX_AUDIO)
         throw new Error("変換後の音声が大きすぎます（" + (wav.size/1048576).toFixed(1) + "MB）。10分以内に分けて録音してください。");
-      r = await send(wav);
+      r = await send([wav]);
     }
 
     state.trans = r;
@@ -1106,6 +1220,7 @@ $("btnTranscribe").onclick = async ()=>{
   }catch(err){ msg($("audioInfo"), err.message, true); }
   finally{ busy(btn,false); }
 };
+
 
 async function fillStep2(r){
   $("confNote").innerHTML = r.confidence_note
@@ -1245,7 +1360,14 @@ $("btnSave").onclick = async ()=>{
       chapter: `${$("fChapNo").value.trim()} ${$("fChapTitle").value.trim()}`.trim() };
     state.bookId = bookId;
 
-    $("savedMsg").textContent = "控えは設定タブから書き出せます。";
+    // 本文として収蔵できたので、録音の断片は用済み。容量を占めるため即座に消す
+    const hadRec = recMeta && recMeta.segs > 0;
+    await clearRecSession();
+    $("audio").value = "";
+
+    $("savedMsg").textContent = hadRec
+      ? "録音は端末から削除しました。控えは設定タブから書き出せます。"
+      : "控えは設定タブから書き出せます。";
     $("savedWhat").innerHTML =
       `<div class="src"><strong>『${esc(lastSaved.title)}』</strong><br>` +
       `${esc(lastSaved.chapter)}<br><span class="mono">${esc(chunkId)}</span></div>`;
@@ -1855,7 +1977,8 @@ async function renderPersist(){
   $("persistBox").innerHTML = !p.supported
     ? `保護の申請 : このブラウザは対応していません<br>控えの書き出しを必ず定期的に行ってください`
     : `保護の状態 : ${p.persisted ? "保護されています" : "保護されていません"}<br>` +
-      `使用量     : ${mb(p.usage)} ／ 上限 ${mb(p.quota)}`;
+      `使用量     : ${mb(p.usage)} ／ 上限 ${mb(p.quota)}` +
+      (recMeta && recMeta.segs ? `<br>録音の一時データ : ${fmtTime(recMeta.elapsed)} 分が未収蔵のまま残っています` : "");
 }
 
 $("btnPersist").onclick = async ()=>{
@@ -2059,8 +2182,8 @@ $("importFile").onchange = async e=>{
 $("btnWipe").onclick = async ()=>{
   if(!confirm("すべての本・章・タグ・鍵を削除します。取り消せません。続けますか？")) return;
   if(!confirm("本当に削除しますか？　先にJSONへ書き出すことを強くおすすめします。")) return;
-  await Promise.all(["books","chunks","tags","settings"].map(clearS));
-  openBook = null; selectedTags.clear();
+  await Promise.all(["books","chunks","tags","recsegs","settings"].map(clearS));
+  openBook = null; selectedTags.clear(); recMeta = null; lastSaved = null;
   alert("削除しました。");
   renderStat();
 };
@@ -2075,6 +2198,12 @@ $("btnWipe").onclick = async ()=>{
     await renderStat();
     await renderAlert();
     await renderIngestBooks();
+    await loadRecSession();
+    if(recMeta && recMeta.segs > 0){
+      setAudio(await assembleSegments(), "録音 " + fmtTime(recMeta.elapsed));
+      $("recInfo").textContent =
+        `前回の録音が ${fmtTime(recMeta.elapsed)} 分残っています。続きを録るか、そのまま文字起こしへ進めます。`;
+    }
 
     if(location.protocol === "file:"){
       document.querySelector('#nav button[data-p="settings"]').click();
