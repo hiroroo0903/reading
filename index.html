@@ -94,6 +94,7 @@ button.btn.ghost:hover{background:rgba(31,58,95,.07)}
 button.btn.warn{border-color:var(--danger);background:transparent;color:var(--danger)}
 button.btn:disabled{opacity:.45;cursor:not-allowed}
 button.btn:focus-visible{outline:2px solid var(--mustard);outline-offset:2px}
+button.btn.mini{font-size:12px;font-weight:500;padding:5px 12px;margin-top:9px}
 .actions{display:flex;gap:10px;margin-top:20px}
 .actions .btn{flex:1}
 
@@ -468,6 +469,20 @@ const getAll = s => req(tx(s,"readonly").getAll());
 const put    = (s,v)=> req(tx(s,"readwrite").put(v));
 const getOne = (s,k)=> req(tx(s,"readonly").get(k));
 const clearS = s => req(tx(s,"readwrite").clear());
+const del    = (s,k)=> req(tx(s,"readwrite").delete(k));
+
+/* 章を直したり消したりした後、タグの使用回数を実データから作り直す */
+async function rebuildTags(){
+  const chunks = await getAll("chunks");
+  const old = await getAll("tags");
+  const first = Object.fromEntries(old.map(t=>[t.tag, t.first_used]));
+  const note  = Object.fromEntries(old.map(t=>[t.tag, t.note]));
+  const count = {};
+  chunks.forEach(c=>(c.tags||[]).forEach(t=>count[t]=(count[t]||0)+1));
+  await clearS("tags");
+  for(const [tag,n] of Object.entries(count))
+    await put("tags",{tag, count:n, first_used:first[tag]||todayStr(), note:note[tag]||""});
+}
 
 async function getSetting(k,def=""){ const r = await getOne("settings",k); return r ? r.value : def; }
 const setSetting = (k,value)=> put("settings",{key:k,value});
@@ -588,20 +603,21 @@ function chapKey(c){
   const m = String(c.chapter_no||"").match(/\d+(?:[-.]\d+)*/);
   return m ? m[0].split(/[-.]/).map(Number) : [Number.MAX_SAFE_INTEGER];
 }
-function sortChunks(cs){
-  return [...cs].sort((a,b)=>{
-    const x = chapKey(a), y = chapKey(b);
-    for(let i=0;i<Math.max(x.length,y.length);i++){
-      const d = (x[i]||0)-(y[i]||0); if(d) return d;
-    }
-    return String(a.chunk_id).localeCompare(String(b.chunk_id));
-  });
+function cmpChap(a,b){
+  const x = chapKey(a), y = chapKey(b);
+  for(let i=0;i<Math.max(x.length,y.length);i++){
+    const d = (x[i]||0)-(y[i]||0); if(d) return d;
+  }
+  return String(a.chunk_id).localeCompare(String(b.chunk_id));
 }
+function sortChunks(cs){ return [...cs].sort(cmpChap); }
 
-/* 同じ本の既読章を、議論の流れを追える形にまとめる */
-async function priorContext(bookId){
+/* 同じ本の既読章を、議論の流れを追える形にまとめる。
+   before を渡すと、その章より前のものだけを対象にする（作り直し用）。 */
+async function priorContext(bookId, before){
   if(!bookId) return "";
-  const cs = sortChunks((await getAll("chunks")).filter(c=>c.book_id===bookId));
+  let cs = sortChunks((await getAll("chunks")).filter(c=>c.book_id===bookId));
+  if(before) cs = cs.filter(c=>c.chunk_id!==before.chunk_id && cmpChap(c,before)<0);
   if(!cs.length) return "";
   return cs.map(c=>
 `■ ${c.chapter_no} ${c.chapter_title}
@@ -955,7 +971,7 @@ $("btnNext").onclick = ()=>{
 /* =====================================================================
    書架
 ===================================================================== */
-let openBook = null;
+let openBook = null, editing = null;
 
 async function renderShelf(){
   const books  = await getAll("books");
@@ -987,12 +1003,15 @@ function renderBook(books, chunks){
   if(!b){ $("bookDetail").innerHTML=""; return; }
   const cs = sortChunks(chunks.filter(c=>c.book_id===b.book_id));
 
+  if(editing){ renderEditor(books, cs, b); return; }
+
   const stale = b.storyline && Number(b.storyline_chapters) !== cs.length;
 
   $("bookDetail").innerHTML = `
     <div class="card">
       <h2>${esc(b.title)}</h2>
       <p class="lede">${esc(b.author||"著者不明")} ／ ${esc(b.genre)} ／ ${cs.length}章 ／ 計${cs.reduce((s,c)=>s+(c.char_count||0),0).toLocaleString()}字</p>
+      <button class="btn ghost mini" data-editbook="1">この本の情報を直す</button>
       ${b.purpose ? `<div class="note">読む目的：${esc(b.purpose)}</div>` : ""}
 
       <div id="storyBox">
@@ -1023,12 +1042,197 @@ function renderBook(books, chunks){
             <div class="body-text">${esc(c.body_text)}</div>
             ${c.my_comment ? `<div class="src" style="margin-top:9px"><strong>所感</strong><br>${esc(c.my_comment)}</div>` : ""}
           </details>
+          <button class="btn ghost mini" data-editchunk="${esc(c.chunk_id)}">この章を直す</button>
         </div>`).join("")}
     </div>`;
+
+  $("bookDetail").querySelectorAll("[data-editchunk]").forEach(el=>{
+    el.onclick = ()=>{ editing = {type:"chunk", id:el.dataset.editchunk}; renderShelf(); };
+  });
+  const eb = $("bookDetail").querySelector("[data-editbook]");
+  if(eb) eb.onclick = ()=>{ editing = {type:"book", id:b.book_id}; renderShelf(); };
 
   const sb = $("btnStory");
   sb.dataset.label = sb.textContent;
   sb.onclick = ()=> buildStoryline(b, cs, sb);
+}
+
+/* ===================== 編集 ===================== */
+function renderEditor(books, cs, book){
+  const box = $("bookDetail");
+  const catOpt = (v,none)=>
+    (none?`<option value="">（なし）</option>`:"") +
+    CATEGORIES.map(c=>`<option${c===v?" selected":""}>${esc(c)}</option>`).join("");
+
+  if(editing.type==="book"){
+    box.innerHTML = `
+      <div class="card">
+        <h2>本の情報を直す</h2>
+        <p class="lede">${esc(book.book_id)} ／ ${cs.length}章</p>
+        <div class="row">
+          <div><label for="eTitle">書名</label><input type="text" id="eTitle" value="${esc(book.title)}"></div>
+          <div><label for="eAuthor">著者</label><input type="text" id="eAuthor" value="${esc(book.author||"")}"></div>
+        </div>
+        <label for="eGenre">主ジャンル</label><select id="eGenre">${catOpt(book.genre)}</select>
+        <label for="ePurpose">読む目的</label><input type="text" id="ePurpose" value="${esc(book.purpose||"")}">
+        <label for="eStatus">状態</label>
+        <select id="eStatus">
+          <option${book.status==="読書中"?" selected":""}>読書中</option>
+          <option${book.status==="読了"?" selected":""}>読了</option>
+          <option${book.status==="中断"?" selected":""}>中断</option>
+        </select>
+        <div class="actions">
+          <button class="btn ghost" id="eCancel">やめる</button>
+          <button class="btn" id="eSave">保存する</button>
+        </div>
+        <div class="actions" style="margin-top:22px">
+          <button class="btn warn" id="eDelBook">この本と${cs.length}章をすべて削除</button>
+        </div>
+      </div>`;
+
+    $("eCancel").onclick = ()=>{ editing=null; renderShelf(); };
+    $("eSave").onclick = async ()=>{
+      await put("books",{...book, title:$("eTitle").value.trim()||"（無題）",
+        author:$("eAuthor").value.trim(), genre:$("eGenre").value,
+        purpose:$("ePurpose").value.trim(), status:$("eStatus").value, updated_at:nowStr()});
+      editing=null; renderShelf();
+    };
+    $("eDelBook").onclick = async ()=>{
+      if(!confirm(`『${book.title}』と、その${cs.length}章をすべて削除します。取り消せません。`)) return;
+      if(!confirm("本当に削除しますか。")) return;
+      for(const c of cs) await del("chunks", c.chunk_id);
+      await del("books", book.book_id);
+      await rebuildTags();
+      editing=null; openBook=null; renderShelf();
+    };
+    window.scrollTo(0,0);
+    return;
+  }
+
+  // ---- 章の編集 ----
+  const c = cs.find(x=>x.chunk_id===editing.id);
+  if(!c){ editing=null; renderShelf(); return; }
+
+  box.innerHTML = `
+    <div class="card">
+      <h2>章を直す</h2>
+      <p class="lede">${esc(c.chunk_id)} ／ 記録日 ${esc(c.recorded_at)} ／ ${esc(c.prompt_version||"")}</p>
+
+      <label for="eBook">収める本</label>
+      <select id="eBook">${books.map(b=>
+        `<option value="${esc(b.book_id)}"${b.book_id===c.book_id?" selected":""}>${esc(b.title)}</option>`).join("")}</select>
+      <div class="hint">別の本に移すと、流れの記録がずれることがあります。移した後で作り直してください。</div>
+
+      <div class="row">
+        <div style="flex:0 0 120px"><label for="eChapNo">章番号</label><input type="text" id="eChapNo" value="${esc(c.chapter_no)}"></div>
+        <div style="flex:2"><label for="eChapTitle">章タイトル</label><input type="text" id="eChapTitle" value="${esc(c.chapter_title)}"></div>
+      </div>
+
+      <label for="eBody">本文</label>
+      <textarea id="eBody" style="min-height:260px">${esc(c.body_text)}</textarea>
+      <label for="eComment">所感</label>
+      <textarea id="eComment" style="min-height:140px">${esc(c.my_comment||"")}</textarea>
+
+      <div class="actions">
+        <button class="btn ghost" id="eRegen">本文から要約とタグを作り直す</button>
+      </div>
+      <div class="hint">本文を大きく直したときや、要約の質に不満があるときに使います。下の項目が上書きされます。</div>
+
+      <label for="eShort">一言要約</label>
+      <textarea id="eShort" style="min-height:70px">${esc(c.short_summary||"")}</textarea>
+      <label for="eSummary">詳細要約</label>
+      <textarea id="eSummary" style="min-height:150px">${esc(c.summary||"")}</textarea>
+      <label for="ePoints">要点（1行に1つ）</label>
+      <textarea id="ePoints" style="min-height:120px">${esc((c.key_points||[]).join("\n"))}</textarea>
+      <label for="eFlow">前章からの流れ</label>
+      <textarea id="eFlow" style="min-height:100px">${esc(c.context_flow||"")}</textarea>
+      <label for="eShift">私の考えの変化</label>
+      <textarea id="eShift" style="min-height:90px">${esc(c.thought_shift||"")}</textarea>
+
+      <div class="row">
+        <div><label for="eCat1">大分類</label><select id="eCat1">${catOpt(c.category_1)}</select></div>
+        <div><label for="eCat2">大分類（副）</label><select id="eCat2">${catOpt(c.category_2,true)}</select></div>
+      </div>
+      <label for="eTags">タグ（カンマ区切り）</label>
+      <input type="text" id="eTags" value="${esc((c.tags||[]).join(", "))}">
+
+      <label>想定Q&amp;A</label>
+      <div id="eQaBox">${(c.qa||[]).map((q,i)=>`
+        <div class="qa-item">
+          <input type="text" id="eq${i}" value="${esc(q.q)}">
+          <textarea id="ea${i}" style="min-height:64px;margin-top:5px">${esc(q.a)}</textarea>
+        </div>`).join("")}</div>
+
+      <label for="eImp">重要度 <span id="eImpVal" class="mono">${c.importance}</span></label>
+      <input type="range" id="eImp" min="1" max="5" step="1" value="${c.importance}" style="width:100%">
+
+      <div class="actions">
+        <button class="btn ghost" id="eCancel">やめる</button>
+        <button class="btn" id="eSave">保存する</button>
+      </div>
+      <div class="actions" style="margin-top:22px">
+        <button class="btn warn" id="eDelChunk">この章を削除</button>
+      </div>
+    </div>`;
+
+  $("eImp").oninput = ()=> $("eImpVal").textContent = $("eImp").value;
+  $("eCancel").onclick = ()=>{ editing=null; renderShelf(); };
+
+  $("eRegen").dataset.label = "本文から要約とタグを作り直す";
+  $("eRegen").onclick = async ()=>{
+    const btn = $("eRegen");
+    busy(btn,true,"作り直しています");
+    try{
+      const tags = (await getAll("tags")).sort((a,b)=>b.count-a.count).map(t=>t.tag);
+      const prior = await priorContext($("eBook").value, {...c, chapter_no:$("eChapNo").value});
+      const m = await callGemini([{text: metaPrompt(
+        $("eBody").value, $("eComment").value, tags, prior)}], 0.3);
+      $("eShort").value = m.short_summary||"";
+      $("eSummary").value = m.summary||"";
+      $("ePoints").value = (m.key_points||[]).join("\n");
+      $("eFlow").value = m.context_flow||"";
+      $("eShift").value = m.thought_shift||"";
+      if(CATEGORIES.includes(m.category_1)) $("eCat1").value = m.category_1;
+      $("eCat2").value = CATEGORIES.includes(m.category_2) ? m.category_2 : "";
+      $("eTags").value = (m.tags||[]).join(", ");
+      $("eQaBox").innerHTML = (m.qa||[]).map((q,i)=>`
+        <div class="qa-item">
+          <input type="text" id="eq${i}" value="${esc(q.q)}">
+          <textarea id="ea${i}" style="min-height:64px;margin-top:5px">${esc(q.a)}</textarea>
+        </div>`).join("");
+      $("eImp").value = m.importance||3; $("eImpVal").textContent = $("eImp").value;
+    }catch(err){ alert(err.message); }
+    finally{ busy(btn,false); }
+  };
+
+  $("eSave").onclick = async ()=>{
+    const qa = [...$("eQaBox").querySelectorAll(".qa-item")].map((_,i)=>
+      ({q:$("eq"+i).value, a:$("ea"+i).value}));
+    await put("chunks",{...c,
+      book_id:$("eBook").value,
+      chapter_no:$("eChapNo").value.trim(), chapter_title:$("eChapTitle").value.trim(),
+      body_text:$("eBody").value, my_comment:$("eComment").value,
+      short_summary:$("eShort").value, summary:$("eSummary").value,
+      key_points:$("ePoints").value.split("\n").filter(Boolean),
+      context_flow:$("eFlow").value, thought_shift:$("eShift").value,
+      category_1:$("eCat1").value, category_2:$("eCat2").value,
+      tags:$("eTags").value.split(",").map(s=>s.trim()).filter(Boolean),
+      qa, importance:Number($("eImp").value),
+      char_count:$("eBody").value.length, updated_at:nowStr()
+    });
+    await rebuildTags();
+    openBook = $("eBook").value;
+    editing = null; renderShelf();
+  };
+
+  $("eDelChunk").onclick = async ()=>{
+    if(!confirm(`${c.chapter_no} ${c.chapter_title} を削除します。取り消せません。`)) return;
+    await del("chunks", c.chunk_id);
+    await rebuildTags();
+    editing=null; renderShelf();
+  };
+
+  window.scrollTo(0,0);
 }
 
 /* この本の全章から、議論の流れと自分の考えの推移をまとめ直す */
